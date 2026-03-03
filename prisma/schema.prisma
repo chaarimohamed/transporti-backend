@@ -1,0 +1,180 @@
+// This is your Prisma schema file
+// Learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// Enums
+enum ShipmentStatus {
+  PENDING     // En attente (shipment created)
+  REQUESTED   // Demandé (carrier applied)
+  CONFIRMED   // Confirmé (sender accepted carrier)
+  IN_TRANSIT  // En transit (delivery in progress)
+  DELIVERED   // Livré (completed)
+  CANCELLED   // Annulé (cancelled)
+}
+
+enum NotificationType {
+  CARRIER_REQUEST       // Carrier requested shipment
+  SHIPMENT_INVITATION   // Sender invited carrier
+  REQUEST_ACCEPTED      // Sender accepted carrier
+  REQUEST_REJECTED      // Sender rejected carrier
+  SHIPMENT_IN_TRANSIT   // Shipment started delivery
+  SHIPMENT_DELIVERED    // Shipment delivered
+}
+
+// Sender model
+model Sender {
+  id        String   @id @default(uuid())
+  email     String   @unique
+  password  String   // Hashed with bcrypt
+  firstName String
+  lastName  String
+  phone     String
+  
+  // Password reset
+  resetToken       String?   @unique
+  resetTokenExpiry DateTime?
+  
+  // Timestamps
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  
+  // Relations
+  shipments     Shipment[]
+  notifications Notification[]
+  reviews       Review[]
+  
+  @@map("senders")
+}
+
+// Carrier model
+model Carrier {
+  id        String   @id @default(uuid())
+  email     String   @unique
+  password  String   // Hashed with bcrypt
+  firstName String
+  lastName  String
+  phone     String
+  
+  // Carrier-specific fields
+  gouvernerat String?
+  license     String?
+  matricule   String?
+  verified    Boolean @default(false)
+  
+  // Rating fields (computed/cached)
+  averageRating Float? @default(0)
+  totalReviews  Int    @default(0)
+  
+  // Password reset
+  resetToken       String?   @unique
+  resetTokenExpiry DateTime?
+  
+  // Timestamps
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  
+  // Relations
+  shipments     Shipment[]
+  notifications Notification[]
+  reviews       Review[]
+  
+  @@map("carriers")
+}
+
+// Shipment model (created by senders)
+model Shipment {
+  id          String         @id @default(uuid())
+  refNumber   String         @unique // EXP-2938
+  from        String
+  to          String
+  cargo       String?
+  price       Float
+  status      ShipmentStatus @default(PENDING)
+  description String?
+  
+  // Sender relation
+  senderId    String
+  sender      Sender         @relation(fields: [senderId], references: [id], onDelete: Cascade)
+  
+  // Carrier relation (optional - assigned later)
+  carrierId   String?
+  carrier     Carrier?       @relation(fields: [carrierId], references: [id], onDelete: SetNull)
+  
+  // Requested carrier (carrier who expressed interest)
+  requestedCarrierId String?
+  
+  // Review relation (optional - one review per shipment)
+  review Review?
+  
+  // Timestamps
+  createdAt   DateTime       @default(now())
+  updatedAt   DateTime       @updatedAt
+  
+  @@map("shipments")
+}
+
+// Notification model
+model Notification {
+  id        String           @id @default(uuid())
+  type      NotificationType
+  title     String
+  message   String
+  read      Boolean          @default(false)
+  
+  // Sender relation (optional - if notification is for sender)
+  senderId  String?
+  sender    Sender?          @relation(fields: [senderId], references: [id], onDelete: Cascade)
+  
+  // Carrier relation (optional - if notification is for carrier)
+  carrierId String?
+  carrier   Carrier?         @relation(fields: [carrierId], references: [id], onDelete: Cascade)
+  
+  // Shipment relation (optional - what the notification is about)
+  shipmentId String?
+  
+  // Additional data (JSON)
+  data      Json?
+  
+  // Timestamps
+  createdAt DateTime         @default(now())
+  updatedAt DateTime         @updatedAt
+  
+  @@map("notifications")
+  @@index([senderId, read])
+  @@index([carrierId, read])
+}
+
+// Review model
+model Review {
+  id      String @id @default(uuid())
+  rating  Float  // 0-5 star rating
+  comment String? // Optional text feedback
+  
+  // Carrier being reviewed
+  carrierId String
+  carrier   Carrier @relation(fields: [carrierId], references: [id], onDelete: Cascade)
+  
+  // Sender who wrote the review
+  senderId String
+  sender   Sender @relation(fields: [senderId], references: [id], onDelete: Cascade)
+  
+  // Shipment this review is for (one review per shipment)
+  shipmentId String   @unique
+  shipment   Shipment @relation(fields: [shipmentId], references: [id], onDelete: Cascade)
+  
+  // Timestamps
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  
+  @@map("reviews")
+  @@index([carrierId])
+  @@index([senderId])
+}

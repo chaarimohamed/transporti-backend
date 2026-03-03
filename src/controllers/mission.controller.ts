@@ -1,0 +1,376 @@
+import { Request, Response } from 'express';
+import { ShipmentStatus } from '@prisma/client';
+import prisma from '../config/database';
+
+// Get available missions (for carriers to browse)
+export const getAvailableMissions = async (req: Request, res: Response) => {
+  try {
+    const { status, sortBy } = req.query;
+
+    const where: any = {
+      status: status as ShipmentStatus || 'PENDING',
+    };
+
+    const missions = await prisma.shipment.findMany({
+      where,
+      orderBy: {
+        createdAt: 'desc',
+      },
+      include: {
+        carrier: {
+          select: {
+            id: true,
+            firstName: true,
+            lastName: true,
+            phone: true,
+          },
+        },
+      },
+    });
+
+    res.json({ missions });
+  } catch (error) {
+    console.error('Error fetching missions:', error);
+    res.status(500).json({ error: 'Failed to fetch missions' });
+  }
+};
+
+// Get my missions (missions assigned to the logged-in carrier)
+export const getMyMissions = async (req: Request, res: Response) => {
+  try {
+    const carrierId = (req as any).user.id;
+    const { status } = req.query;
+
+    const where: any = {
+      carrierId,
+    };
+
+    if (status) {
+      where.status = status as ShipmentStatus;
+    }
+
+    const missions = await prisma.shipment.findMany({
+      where,
+      orderBy: {
+        createdAt: 'desc',
+      },
+    });
+
+    res.json({ missions });
+  } catch (error) {
+    console.error('Error fetching my missions:', error);
+    res.status(500).json({ error: 'Failed to fetch missions' });
+  }
+};
+
+// Get mission by ID
+export const getMissionById = async (req: Request, res: Response) => {
+  try {
+    const { id } = req.params;
+    const userId = (req as any).user.id;
+
+    const mission = await prisma.shipment.findUnique({
+      where: { id },
+      include: {
+        carrier: {
+          select: {
+            id: true,
+            firstName: true,
+            lastName: true,
+            phone: true,
+          },
+        },
+      },
+    });
+
+    if (!mission) {
+      return res.status(404).json({ error: 'Mission not found' });
+    }
+
+    res.json({ mission });
+  } catch (error) {
+    console.error('Error fetching mission:', error);
+    res.status(500).json({ error: 'Failed to fetch mission' });
+  }
+};
+
+// Accept a mission
+export const acceptMission = async (req: Request, res: Response) => {
+  try {
+    const { id } = req.params;
+    const carrierId = (req as any).user.id;
+    const { counterOffer } = req.body;
+
+    const mission = await prisma.shipment.findUnique({
+      where: { id },
+    });
+
+    if (!mission) {
+      return res.status(404).json({ error: 'Mission not found' });
+    }
+
+    if (mission.status !== 'PENDING' && mission.status !== 'REQUESTED') {
+      return res.status(400).json({ error: 'Mission is not available' });
+    }
+
+    const updatedMission = await prisma.shipment.update({
+      where: { id },
+      data: {
+        carrierId,
+        status: 'CONFIRMED',
+        price: counterOffer || mission.price,
+      },
+      include: {
+        carrier: {
+          select: {
+            id: true,
+            firstName: true,
+            lastName: true,
+            phone: true,
+          },
+        },
+      },
+    });
+
+    res.json({ mission: updatedMission });
+  } catch (error) {
+    console.error('Error accepting mission:', error);
+    res.status(500).json({ error: 'Failed to accept mission' });
+  }
+};
+
+// Update mission status
+export const updateMissionStatus = async (req: Request, res: Response) => {
+  try {
+    const { id } = req.params;
+    const { status } = req.body;
+    const carrierId = (req as any).user.id;
+
+    console.log('🔄 Update mission status request:', { id, status, carrierId });
+
+    const mission = await prisma.shipment.findUnique({
+      where: { id },
+    });
+
+    if (!mission) {
+      return res.status(404).json({ error: 'Mission not found' });
+    }
+
+    console.log('📦 Mission found:', { 
+      missionId: mission.id, 
+      missionCarrierId: mission.carrierId,
+      requestCarrierId: carrierId,
+      status: mission.status 
+    });
+
+    // Check if carrier is authorized (must be assigned to this carrier)
+    if (mission.carrierId && mission.carrierId !== carrierId) {
+      console.log('❌ Authorization failed: carrier mismatch');
+      return res.status(403).json({ error: 'Not authorized' });
+    }
+
+    // If no carrier assigned yet, assign it to the current carrier
+    const updateData: any = { status: status as ShipmentStatus };
+    if (!mission.carrierId) {
+      console.log('➕ Assigning mission to carrier:', carrierId);
+      updateData.carrierId = carrierId;
+    }
+
+    const updatedMission = await prisma.shipment.update({
+      where: { id },
+      data: updateData,
+      include: {
+        carrier: {
+          select: {
+            id: true,
+            firstName: true,
+            lastName: true,
+            phone: true,
+          },
+        },
+        sender: {
+          select: {
+            id: true,
+            firstName: true,
+            lastName: true,
+          },
+        },
+      },
+    });
+
+    // Send notification to sender about status change
+    // Only send notification for IN_TRANSIT (DELIVERED notification is sent from confirmDelivery)
+    if (mission.senderId && updatedMission.sender && status === 'IN_TRANSIT') {
+      const notification = await prisma.notification.create({
+        data: {
+          senderId: mission.senderId,
+          type: 'SHIPMENT_IN_TRANSIT',
+          title: '🚚 En route',
+          message: `Le transporteur a récupéré votre colis (${mission.refNumber}) et est en route vers la destination.`,
+          data: { shipmentId: mission.id },
+        },
+      });
+      console.log(`🔔 Notification created for sender ${mission.senderId}:`, notification);
+      console.log('📦 Notification data:', notification.data);
+    }
+
+    console.log('✅ Mission updated successfully:', updatedMission.status);
+    res.json({ mission: updatedMission });
+  } catch (error) {
+    console.error('Error updating mission status:', error);
+    res.status(500).json({ error: 'Failed to update mission status' });
+  }
+};
+
+// Confirm delivery with payment code
+export const confirmDelivery = async (req: Request, res: Response) => {
+  try {
+    const { id } = req.params;
+    const { code } = req.body;
+    const carrierId = (req as any).user.id;
+
+    console.log('💰 Confirm delivery request:', { id, code, carrierId });
+
+    const mission = await prisma.shipment.findUnique({
+      where: { id },
+      include: {
+        sender: {
+          select: {
+            id: true,
+            firstName: true,
+            lastName: true,
+          },
+        },
+      },
+    });
+
+    if (!mission) {
+      return res.status(404).json({ error: 'Mission not found' });
+    }
+
+    if (mission.carrierId !== carrierId) {
+      return res.status(403).json({ error: 'Not authorized' });
+    }
+
+    // Validate delivery code (for now, accept 000000 as valid)
+    // In production, this should validate against a real code sent to the customer
+    if (code !== '000000') {
+      return res.status(400).json({ 
+        success: false,
+        error: 'Code incorrect',
+        attemptsLeft: 2,
+      });
+    }
+
+    // Update mission status to DELIVERED
+    const updatedMission = await prisma.shipment.update({
+      where: { id },
+      data: { status: 'DELIVERED' },
+      include: {
+        carrier: {
+          select: {
+            id: true,
+            firstName: true,
+            lastName: true,
+            phone: true,
+            matricule: true,
+          },
+        },
+        sender: {
+          select: {
+            id: true,
+            firstName: true,
+            lastName: true,
+            phone: true,
+          },
+        },
+      },
+    });
+
+    // Send notification to sender
+    if (mission.senderId) {
+      await prisma.notification.create({
+        data: {
+          senderId: mission.senderId,
+          type: 'SHIPMENT_DELIVERED',
+          title: '🎉 Livraison confirmée',
+          message: `Votre colis (${mission.refNumber}) a été livré avec succès. Le code de confirmation a été validé.`,
+          data: { shipmentId: mission.id },
+        },
+      });
+      console.log(`🔔 Delivery notification sent to sender ${mission.senderId}`);
+    }
+
+    console.log('✅ Delivery confirmed successfully');
+    res.json({ 
+      success: true,
+      mission: updatedMission,
+      receiptNumber: `RCP${Math.floor(Math.random() * 10000)}`,
+    });
+  } catch (error) {
+    console.error('Error confirming delivery:', error);
+    res.status(500).json({ error: 'Failed to confirm delivery' });
+  }
+};
+
+// Cancel mission
+export const cancelMission = async (req: Request, res: Response) => {
+  try {
+    const { id } = req.params;
+    const carrierId = (req as any).user.id;
+
+    const mission = await prisma.shipment.findUnique({
+      where: { id },
+    });
+
+    if (!mission) {
+      return res.status(404).json({ error: 'Mission not found' });
+    }
+
+    if (mission.carrierId !== carrierId) {
+      return res.status(403).json({ error: 'Not authorized' });
+    }
+
+    const updatedMission = await prisma.shipment.update({
+      where: { id },
+      data: {
+        status: 'CANCELLED',
+      },
+    });
+
+    res.json({ mission: updatedMission });
+  } catch (error) {
+    console.error('Error canceling mission:', error);
+    res.status(500).json({ error: 'Failed to cancel mission' });
+  }
+};
+
+// Get mission stats
+export const getMissionStats = async (req: Request, res: Response) => {
+  try {
+    const carrierId = (req as any).user.id;
+
+    const [assigned, inProgress, completed] = await Promise.all([
+      prisma.shipment.count({
+        where: { carrierId, status: 'CONFIRMED' },
+      }),
+      prisma.shipment.count({
+        where: { carrierId, status: 'IN_TRANSIT' },
+      }),
+      prisma.shipment.count({
+        where: { carrierId, status: 'DELIVERED' },
+      }),
+    ]);
+
+    res.json({
+      stats: {
+        assigned,
+        inProgress,
+        completed,
+      },
+    });
+  } catch (error) {
+    console.error('Error fetching mission stats:', error);
+    res.status(500).json({ error: 'Failed to fetch mission stats' });
+  }
+};
