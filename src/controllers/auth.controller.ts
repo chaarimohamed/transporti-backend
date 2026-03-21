@@ -261,7 +261,9 @@ export const forgotPassword = async (req: Request, res: Response) => {
     if (!user || !userRole) {
       return res.status(200).json({
         success: true,
-        message: 'Si un compte existe avec cet email, un code de réinitialisation a été envoyé',
+        data: {
+          message: 'Si un compte existe avec cet email, un code de réinitialisation a été envoyé',
+        },
       });
     }
 
@@ -295,9 +297,11 @@ export const forgotPassword = async (req: Request, res: Response) => {
 
     res.status(200).json({
       success: true,
-      message: 'Si un compte existe avec cet email, un code de réinitialisation a été envoyé',
-      // In development, include the token (remove this in production)
-      ...(process.env.NODE_ENV === 'development' && { resetToken }),
+      data: {
+        message: 'Si un compte existe avec cet email, un code de réinitialisation a été envoyé',
+        // Return token whenever not in production so dev/ngrok testing works without SMTP
+        ...(process.env.NODE_ENV !== 'production' && { resetToken }),
+      },
     });
   } catch (error) {
     console.error('Forgot password error:', error);
