@@ -132,6 +132,24 @@ export const acceptMission = async (req: Request, res: Response) => {
       },
     });
 
+    // BUG-01 fix: notify the sender that a transporter accepted their mission
+    if (mission.senderId) {
+      await prisma.notification.create({
+        data: {
+          type: 'REQUEST_ACCEPTED',
+          title: '✅ Transporteur confirmé',
+          message: `Un transporteur a accepté votre expédition ${mission.refNumber}. La livraison est maintenant confirmée.`,
+          senderId: mission.senderId,
+          shipmentId: id,
+          data: {
+            carrierId,
+            shipmentRefNumber: mission.refNumber,
+          },
+        },
+      });
+      console.log(`🔔 Notification sent to sender ${mission.senderId} — carrier accepted mission ${mission.refNumber}`);
+    }
+
     res.json({ mission: updatedMission });
   } catch (error) {
     console.error('Error accepting mission:', error);
@@ -199,19 +217,19 @@ export const updateMissionStatus = async (req: Request, res: Response) => {
     });
 
     // Send notification to sender about status change
-    // Only send notification for IN_TRANSIT (DELIVERED notification is sent from confirmDelivery)
-    if (mission.senderId && updatedMission.sender && status === 'IN_TRANSIT') {
-      const notification = await prisma.notification.create({
+    if (mission.senderId && status === 'IN_TRANSIT') {
+      // BUG-03 fix: shipmentId must be the top-level DB field, not buried in data JSON
+      await prisma.notification.create({
         data: {
           senderId: mission.senderId,
+          shipmentId: mission.id,
           type: 'SHIPMENT_IN_TRANSIT',
           title: '🚚 En route',
           message: `Le transporteur a récupéré votre colis (${mission.refNumber}) et est en route vers la destination.`,
-          data: { shipmentId: mission.id },
+          data: { shipmentId: mission.id, shipmentRefNumber: mission.refNumber },
         },
       });
-      console.log(`🔔 Notification created for sender ${mission.senderId}:`, notification);
-      console.log('📦 Notification data:', notification.data);
+      console.log(`🔔 IN_TRANSIT notification sent to sender ${mission.senderId} for mission ${mission.refNumber}`);
     }
 
     console.log('✅ Mission updated successfully:', updatedMission.status);
@@ -289,16 +307,18 @@ export const confirmDelivery = async (req: Request, res: Response) => {
 
     // Send notification to sender
     if (mission.senderId) {
+      // BUG-04 fix: shipmentId must be the top-level DB field so the mobile deep-link works
       await prisma.notification.create({
         data: {
           senderId: mission.senderId,
+          shipmentId: mission.id,
           type: 'SHIPMENT_DELIVERED',
           title: '🎉 Livraison confirmée',
           message: `Votre colis (${mission.refNumber}) a été livré avec succès. Le code de confirmation a été validé.`,
-          data: { shipmentId: mission.id },
+          data: { shipmentId: mission.id, shipmentRefNumber: mission.refNumber },
         },
       });
-      console.log(`🔔 Delivery notification sent to sender ${mission.senderId}`);
+      console.log(`🔔 DELIVERED notification sent to sender ${mission.senderId} for mission ${mission.refNumber}`);
     }
 
     console.log('✅ Delivery confirmed successfully');

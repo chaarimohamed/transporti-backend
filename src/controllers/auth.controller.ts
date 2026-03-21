@@ -308,6 +308,71 @@ export const forgotPassword = async (req: Request, res: Response) => {
   }
 };
 
+// Update user profile
+export const updateProfile = async (req: any, res: Response) => {
+  try {
+    const userId = req.user.id;
+    const userRole = req.user.role;
+    const { firstName, lastName, email, phone, gouvernorat } = req.body;
+
+    let updatedUser;
+
+    if (userRole === 'sender') {
+      updatedUser = await prisma.sender.update({
+        where: { id: userId },
+        data: {
+          ...(firstName && { firstName }),
+          ...(lastName && { lastName }),
+          ...(email && { email: email.toLowerCase() }),
+          ...(phone && { phone }),
+        },
+        select: {
+          id: true,
+          email: true,
+          firstName: true,
+          lastName: true,
+          phone: true,
+          createdAt: true,
+        },
+      });
+    } else if (userRole === 'carrier') {
+      updatedUser = await prisma.carrier.update({
+        where: { id: userId },
+        data: {
+          ...(firstName && { firstName }),
+          ...(lastName && { lastName }),
+          ...(email && { email: email.toLowerCase() }),
+          ...(phone && { phone }),
+          // gouvernorat from the form maps to the gouvernerat DB column
+          ...(gouvernorat !== undefined && { gouvernerat: gouvernorat }),
+        },
+        select: {
+          id: true,
+          email: true,
+          firstName: true,
+          lastName: true,
+          phone: true,
+          gouvernerat: true,
+          license: true,
+          matricule: true,
+          verified: true,
+          createdAt: true,
+        },
+      });
+    } else {
+      return res.status(400).json({ success: false, error: 'Invalid user role' });
+    }
+
+    res.json({
+      success: true,
+      data: { ...updatedUser, role: userRole },
+    });
+  } catch (error) {
+    console.error('Update profile error:', error);
+    res.status(500).json({ success: false, error: 'Erreur lors de la mise à jour du profil' });
+  }
+};
+
 // Reset password with token
 export const resetPassword = async (req: Request, res: Response) => {
   try {
