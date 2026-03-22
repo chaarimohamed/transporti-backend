@@ -1215,3 +1215,39 @@ export const getAvailableCarriers = async (req: any, res: Response) => {
     });
   }
 };
+/**
+ * Get carrier IDs who have been invited to a specific shipment
+ * GET /api/shipments/:id/invited-carriers
+ */
+export const getInvitedCarriers = async (req: any, res: Response) => {
+  try {
+    const { id } = req.params;
+
+    // Only the sender of this shipment may query this
+    const shipment = await prisma.shipment.findUnique({ where: { id } });
+    if (!shipment) {
+      return res.status(404).json({ success: false, error: 'Expédition introuvable' });
+    }
+    if (shipment.senderId !== req.user.id) {
+      return res.status(403).json({ success: false, error: 'Accès non autorisé' });
+    }
+
+    const notifications = await prisma.notification.findMany({
+      where: {
+        type: 'SHIPMENT_INVITATION',
+        shipmentId: id,
+      },
+      select: { carrierId: true },
+    });
+
+    const carrierIds = notifications.map(n => n.carrierId).filter(Boolean);
+
+    res.status(200).json({ success: true, data: carrierIds });
+  } catch (error) {
+    console.error('Get invited carriers error:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Erreur lors de la récupération des transporteurs invités',
+    });
+  }
+};

@@ -15,6 +15,7 @@ import {
   getShipmentStats,
   getCarrierShipmentStats,
   getAvailableCarriers,
+  getInvitedCarriers,
 } from '../controllers/shipment.controller';
 import { auth } from '../middleware/auth';
 
@@ -31,6 +32,7 @@ router.get('/carrier-stats', getCarrierShipmentStats); // Carrier stats
 router.get('/', getMyShipments);
 router.get('/:id', getShipmentById);
 router.get('/:id/available-carriers', getAvailableCarriers); // Get available carriers for shipment
+router.get('/:id/invited-carriers', getInvitedCarriers);   // Get invited carrier IDs for shipment
 router.post('/:id/request', requestShipment); // Carrier requests shipment
 router.post('/:id/invite-carrier', inviteCarrier); // Sender invites carrier
 router.post('/:id/accept-invitation', acceptInvitation); // Carrier accepts invitation
