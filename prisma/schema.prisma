@@ -12,12 +12,13 @@ datasource db {
 
 // Enums
 enum ShipmentStatus {
-  PENDING     // En attente (shipment created)
-  REQUESTED   // Demandé (carrier applied)
-  CONFIRMED   // Confirmé (sender accepted carrier)
-  IN_TRANSIT  // En transit (delivery in progress)
-  DELIVERED   // Livré (completed)
-  CANCELLED   // Annulé (cancelled)
+  PENDING          // En attente (shipment created)
+  REQUESTED        // Demandé (carrier applied)
+  CONFIRMED        // Confirmé (sender accepted carrier)
+  HANDOVER_PENDING // En attente de remise (carrier at pickup, waiting for sender confirmation)
+  IN_TRANSIT       // En transit (delivery in progress)
+  DELIVERED        // Livré (completed)
+  CANCELLED        // Annulé (cancelled)
 }
 
 enum NotificationType {
@@ -25,6 +26,8 @@ enum NotificationType {
   SHIPMENT_INVITATION   // Sender invited carrier
   REQUEST_ACCEPTED      // Sender accepted carrier
   REQUEST_REJECTED      // Sender rejected carrier
+  HANDOVER_REQUESTED    // Carrier arrived, asking sender to confirm handover
+  HANDOVER_CONFIRMED    // Sender confirmed handover to carrier
   SHIPMENT_IN_TRANSIT   // Shipment started delivery
   SHIPMENT_DELIVERED    // Shipment delivered
 }

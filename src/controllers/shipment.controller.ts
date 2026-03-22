@@ -757,14 +757,14 @@ export const rejectCarrier = async (req: any, res: Response) => {
       });
     }
 
-    // Create notification for carrier before deleting
+    // Create notification for carrier before resetting
     await prisma.notification.create({
       data: {
         type: 'REQUEST_REJECTED',
         title: 'Candidature refusée',
         message: `Votre candidature pour l'expédition ${shipment.refNumber} a été refusée`,
         carrierId: shipment.requestedCarrierId!,
-        shipmentId: null, // Shipment will be deleted
+        shipmentId: id,
         data: {
           shipmentRefNumber: shipment.refNumber,
           senderId: req.user.id,
@@ -772,15 +772,20 @@ export const rejectCarrier = async (req: any, res: Response) => {
       },
     });
 
-    // Delete the shipment entirely
-    await prisma.shipment.delete({
+    // Reset shipment back to PENDING so a new carrier can apply
+    const resetShipment = await prisma.shipment.update({
       where: { id },
+      data: {
+        status: ShipmentStatus.PENDING,
+        requestedCarrierId: null,
+        carrierId: null,
+      },
     });
 
     res.status(200).json({
       success: true,
-      message: 'Transporteur refusé et expédition supprimée',
-      data: null,
+      message: 'Transporteur refusé. L\'expédition est à nouveau disponible.',
+      data: resetShipment,
     });
   } catch (error) {
     console.error('Reject carrier error:', error);
@@ -1249,5 +1254,76 @@ export const getInvitedCarriers = async (req: any, res: Response) => {
       success: false,
       error: 'Erreur lors de la récupération des transporteurs invités',
     });
+  }
+};
+
+/**
+ * Sender confirms handover — transitions shipment from HANDOVER_PENDING to IN_TRANSIT
+ * POST /api/shipments/:id/confirm-handover
+ */
+export const confirmHandover = async (req: any, res: Response) => {
+  try {
+    const { id } = req.params;
+    const senderId = req.user.id;
+
+    const shipment = await prisma.shipment.findUnique({ where: { id } });
+
+    if (!shipment) {
+      return res.status(404).json({ success: false, error: 'Expédition introuvable' });
+    }
+
+    if (shipment.senderId !== senderId) {
+      return res.status(403).json({ success: false, error: 'Accès non autorisé' });
+    }
+
+    if (shipment.status !== 'HANDOVER_PENDING') {
+      return res.status(400).json({
+        success: false,
+        error: 'La remise ne peut être confirmée que lorsque le transporteur est arrivé',
+      });
+    }
+
+    const updatedShipment = await prisma.shipment.update({
+      where: { id },
+      data: { status: 'IN_TRANSIT' },
+      include: {
+        carrier: { select: { id: true, firstName: true, lastName: true, phone: true } },
+        sender: { select: { id: true, firstName: true, lastName: true } },
+      },
+    });
+
+    // Notify carrier that the sender confirmed the handover
+    if (shipment.carrierId) {
+      // Carrier notification goes to their carrier record — reuse senderId field mapped to carrierId
+      await prisma.notification.create({
+        data: {
+          carrierId: shipment.carrierId,
+          shipmentId: shipment.id,
+          type: 'HANDOVER_CONFIRMED',
+          title: '✅ Remise confirmée',
+          message: `L'expéditeur a confirmé la remise du colis (${shipment.refNumber}). Bonne route !`,
+          data: { shipmentId: shipment.id, shipmentRefNumber: shipment.refNumber },
+        },
+      });
+      console.log(`🔔 HANDOVER_CONFIRMED notification sent to carrier ${shipment.carrierId} for shipment ${shipment.refNumber}`);
+    }
+
+    // Also notify sender (IN_TRANSIT confirmation)
+    await prisma.notification.create({
+      data: {
+        senderId: shipment.senderId,
+        shipmentId: shipment.id,
+        type: 'SHIPMENT_IN_TRANSIT',
+        title: '🚚 En route',
+        message: `Votre colis (${shipment.refNumber}) est maintenant en route vers la destination.`,
+        data: { shipmentId: shipment.id, shipmentRefNumber: shipment.refNumber },
+      },
+    });
+
+    console.log(`✅ Handover confirmed — shipment ${shipment.refNumber} is now IN_TRANSIT`);
+    res.status(200).json({ success: true, data: updatedShipment });
+  } catch (error) {
+    console.error('Confirm handover error:', error);
+    res.status(500).json({ success: false, error: 'Erreur lors de la confirmation de la remise' });
   }
 };

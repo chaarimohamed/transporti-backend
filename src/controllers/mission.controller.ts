@@ -203,6 +203,38 @@ export const updateMissionStatus = async (req: Request, res: Response) => {
       updateData.carrierId = carrierId;
     }
 
+    // Intercept: carrier requesting IN_TRANSIT must first wait for sender handover confirmation.
+    // Instead of going directly to IN_TRANSIT, we set HANDOVER_PENDING and notify the sender.
+    if (status === 'IN_TRANSIT' && mission.status === 'CONFIRMED') {
+      updateData.status = 'HANDOVER_PENDING';
+
+      const handoverMission = await prisma.shipment.update({
+        where: { id },
+        data: updateData,
+        include: {
+          carrier: { select: { id: true, firstName: true, lastName: true, phone: true } },
+          sender: { select: { id: true, firstName: true, lastName: true } },
+        },
+      });
+
+      if (mission.senderId) {
+        await prisma.notification.create({
+          data: {
+            senderId: mission.senderId,
+            shipmentId: mission.id,
+            type: 'HANDOVER_REQUESTED',
+            title: '📦 Remise du colis',
+            message: `Le transporteur est arrivé pour récupérer votre colis (${mission.refNumber}). Veuillez confirmer que vous lui avez remis le colis.`,
+            data: { shipmentId: mission.id, shipmentRefNumber: mission.refNumber },
+          },
+        });
+        console.log(`🔔 HANDOVER_REQUESTED notification sent to sender ${mission.senderId} for mission ${mission.refNumber}`);
+      }
+
+      console.log('✅ Mission set to HANDOVER_PENDING — awaiting sender confirmation');
+      return res.json({ mission: handoverMission });
+    }
+
     const updatedMission = await prisma.shipment.update({
       where: { id },
       data: updateData,
