@@ -78,6 +78,15 @@ export const getMissionById = async (req: Request, res: Response) => {
             firstName: true,
             lastName: true,
             phone: true,
+            matricule: true,
+          },
+        },
+        sender: {
+          select: {
+            id: true,
+            firstName: true,
+            lastName: true,
+            phone: true,
           },
         },
       },
