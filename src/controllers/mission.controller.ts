@@ -311,9 +311,10 @@ export const confirmDelivery = async (req: Request, res: Response) => {
       return res.status(403).json({ error: 'Not authorized' });
     }
 
-    // Validate delivery code (for now, accept 000000 as valid)
-    // In production, this should validate against a real code sent to the customer
-    if (code !== '000000') {
+    // Validate delivery code against the stored one-time code on the shipment
+    // Fall back to '000000' for shipments that became IN_TRANSIT before this feature
+    const expectedCode = mission.deliveryCode ?? '000000';
+    if (code !== expectedCode) {
       return res.status(400).json({ 
         success: false,
         error: 'Code incorrect',

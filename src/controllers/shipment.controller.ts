@@ -898,6 +898,15 @@ export const cancelShipment = async (req: any, res: Response) => {
       });
     }
 
+    // Cannot cancel once a carrier is confirmed
+    const cancellableStatuses: string[] = ['PENDING', 'REQUESTED'];
+    if (!cancellableStatuses.includes(shipment.status)) {
+      return res.status(400).json({
+        success: false,
+        error: 'Impossible d\'annuler : un transporteur a déjà été confirmé pour cette expédition.',
+      });
+    }
+
     // Update status to CANCELLED
     const cancelled = await prisma.shipment.update({
       where: { id },
@@ -1283,44 +1292,46 @@ export const confirmHandover = async (req: any, res: Response) => {
       });
     }
 
+    // Generate a one-time delivery confirmation code
+    const deliveryCode = Math.floor(100000 + Math.random() * 900000).toString();
+
     const updatedShipment = await prisma.shipment.update({
       where: { id },
-      data: { status: 'IN_TRANSIT' },
+      data: { status: 'IN_TRANSIT', deliveryCode },
       include: {
         carrier: { select: { id: true, firstName: true, lastName: true, phone: true } },
         sender: { select: { id: true, firstName: true, lastName: true } },
       },
     });
 
-    // Notify carrier that the sender confirmed the handover
+    // Notify carrier with the delivery code
     if (shipment.carrierId) {
-      // Carrier notification goes to their carrier record — reuse senderId field mapped to carrierId
       await prisma.notification.create({
         data: {
           carrierId: shipment.carrierId,
           shipmentId: shipment.id,
           type: 'HANDOVER_CONFIRMED',
           title: '✅ Remise confirmée',
-          message: `L'expéditeur a confirmé la remise du colis (${shipment.refNumber}). Bonne route !`,
-          data: { shipmentId: shipment.id, shipmentRefNumber: shipment.refNumber },
+          message: `L'expéditeur a confirmé la remise du colis (${shipment.refNumber}). Votre code de livraison est : ${deliveryCode}. Bonne route !`,
+          data: { shipmentId: shipment.id, shipmentRefNumber: shipment.refNumber, deliveryCode },
         },
       });
       console.log(`🔔 HANDOVER_CONFIRMED notification sent to carrier ${shipment.carrierId} for shipment ${shipment.refNumber}`);
     }
 
-    // Also notify sender (IN_TRANSIT confirmation)
+    // Notify sender with the delivery code to hand to the carrier at destination
     await prisma.notification.create({
       data: {
         senderId: shipment.senderId,
         shipmentId: shipment.id,
         type: 'SHIPMENT_IN_TRANSIT',
-        title: '🚚 En route',
-        message: `Votre colis (${shipment.refNumber}) est maintenant en route vers la destination.`,
-        data: { shipmentId: shipment.id, shipmentRefNumber: shipment.refNumber },
+        title: '🚚 En route — Code de livraison',
+        message: `Votre colis (${shipment.refNumber}) est en route. Code de livraison à donner au transporteur à la réception : ${deliveryCode}`,
+        data: { shipmentId: shipment.id, shipmentRefNumber: shipment.refNumber, deliveryCode },
       },
     });
 
-    console.log(`✅ Handover confirmed — shipment ${shipment.refNumber} is now IN_TRANSIT`);
+    console.log(`✅ Handover confirmed — shipment ${shipment.refNumber} is now IN_TRANSIT, code: ${deliveryCode}`);
     res.status(200).json({ success: true, data: updatedShipment });
   } catch (error) {
     console.error('Confirm handover error:', error);

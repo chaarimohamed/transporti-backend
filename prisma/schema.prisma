@@ -113,6 +113,9 @@ model Shipment {
   
   // Requested carrier (carrier who expressed interest)
   requestedCarrierId String?
+
+  // One-time delivery confirmation code (generated when shipment becomes IN_TRANSIT)
+  deliveryCode       String?
   
   // Review relation (optional - one review per shipment)
   review Review?
