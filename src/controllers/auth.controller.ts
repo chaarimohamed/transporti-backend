@@ -7,7 +7,7 @@ import prisma from '../config/database';
 // Register new user
 export const register = async (req: Request, res: Response) => {
   try {
-    const { email, password, firstName, lastName, phone, role, gouvernerat, license, matricule } = req.body;
+    const { email, password, firstName, lastName, phone, role, gouvernerat, license, matricule, vehicleType, dateOfBirth } = req.body;
 
     // Validate required fields
     if (!email || !password || !firstName || !lastName || !phone || !role) {
@@ -76,6 +76,8 @@ export const register = async (req: Request, res: Response) => {
           gouvernerat,
           license,
           matricule,
+          vehicleType,
+          dateOfBirth,
         },
         select: {
           id: true,
@@ -86,6 +88,8 @@ export const register = async (req: Request, res: Response) => {
           gouvernerat: true,
           license: true,
           matricule: true,
+          vehicleType: true,
+          dateOfBirth: true,
           verified: true,
           createdAt: true,
         },
@@ -195,6 +199,7 @@ export const getMe = async (req: any, res: Response) => {
           firstName: true,
           lastName: true,
           phone: true,
+          dateOfBirth: true,
           createdAt: true,
         },
       });
@@ -207,9 +212,11 @@ export const getMe = async (req: any, res: Response) => {
           firstName: true,
           lastName: true,
           phone: true,
+          dateOfBirth: true,
           gouvernerat: true,
           license: true,
           matricule: true,
+          vehicleType: true,
           verified: true,
           createdAt: true,
         },
@@ -317,7 +324,7 @@ export const updateProfile = async (req: any, res: Response) => {
   try {
     const userId = req.user.id;
     const userRole = req.user.role;
-    const { firstName, lastName, email, phone, gouvernorat } = req.body;
+    const { firstName, lastName, email, phone, gouvernorat, vehicleType, dateOfBirth } = req.body;
 
     let updatedUser;
 
@@ -329,6 +336,7 @@ export const updateProfile = async (req: any, res: Response) => {
           ...(lastName && { lastName }),
           ...(email && { email: email.toLowerCase() }),
           ...(phone && { phone }),
+          ...(dateOfBirth !== undefined && { dateOfBirth }),
         },
         select: {
           id: true,
@@ -336,6 +344,7 @@ export const updateProfile = async (req: any, res: Response) => {
           firstName: true,
           lastName: true,
           phone: true,
+          dateOfBirth: true,
           createdAt: true,
         },
       });
@@ -349,6 +358,8 @@ export const updateProfile = async (req: any, res: Response) => {
           ...(phone && { phone }),
           // gouvernorat from the form maps to the gouvernerat DB column
           ...(gouvernorat !== undefined && { gouvernerat: gouvernorat }),
+          ...(vehicleType !== undefined && { vehicleType }),
+          ...(dateOfBirth !== undefined && { dateOfBirth }),
         },
         select: {
           id: true,
@@ -356,9 +367,11 @@ export const updateProfile = async (req: any, res: Response) => {
           firstName: true,
           lastName: true,
           phone: true,
+          dateOfBirth: true,
           gouvernerat: true,
           license: true,
           matricule: true,
+          vehicleType: true,
           verified: true,
           createdAt: true,
         },

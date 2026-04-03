@@ -115,6 +115,22 @@ export const getMyShipments = async (req: any, res: Response) => {
             firstName: true,
             lastName: true,
             phone: true,
+            gouvernerat: true,
+            averageRating: true,
+            totalReviews: true,
+            vehicleType: true,
+          },
+        },
+        requestedCarrier: {
+          select: {
+            id: true,
+            firstName: true,
+            lastName: true,
+            phone: true,
+            gouvernerat: true,
+            averageRating: true,
+            totalReviews: true,
+            vehicleType: true,
           },
         },
         sender: {

@@ -37,9 +37,10 @@ model Sender {
   id        String   @id @default(uuid())
   email     String   @unique
   password  String   // Hashed with bcrypt
-  firstName String
-  lastName  String
-  phone     String
+  firstName   String
+  lastName    String
+  phone       String
+  dateOfBirth String?   // JJ/MM/AAAA stored as-is
   
   // Password reset
   resetToken       String?   @unique
@@ -67,10 +68,12 @@ model Carrier {
   phone     String
   
   // Carrier-specific fields
-  gouvernerat String?
-  license     String?
-  matricule   String?
-  verified    Boolean @default(false)
+  gouvernerat  String?
+  license      String?
+  matricule    String?
+  vehicleType  String?   // VAN, TRUCK, SEMI_TRAILER, DELIVERY_VAN
+  dateOfBirth  String?   // JJ/MM/AAAA stored as-is
+  verified     Boolean @default(false)
   
   // Rating fields (computed/cached)
   averageRating Float? @default(0)
@@ -85,9 +88,10 @@ model Carrier {
   updatedAt DateTime @updatedAt
   
   // Relations
-  shipments     Shipment[]
-  notifications Notification[]
-  reviews       Review[]
+  shipments          Shipment[]
+  requestedShipments Shipment[]     @relation("RequestedShipments")
+  notifications      Notification[]
+  reviews            Review[]
   
   @@map("carriers")
 }
@@ -113,6 +117,7 @@ model Shipment {
   
   // Requested carrier (carrier who expressed interest)
   requestedCarrierId String?
+  requestedCarrier   Carrier?       @relation("RequestedShipments", fields: [requestedCarrierId], references: [id], onDelete: SetNull)
 
   // One-time delivery confirmation code (generated when shipment becomes IN_TRANSIT)
   deliveryCode       String?

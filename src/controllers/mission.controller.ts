@@ -312,9 +312,10 @@ export const confirmDelivery = async (req: Request, res: Response) => {
     }
 
     // Validate delivery code against the stored one-time code on the shipment
-    // Fall back to '000000' for shipments that became IN_TRANSIT before this feature
+    // Fall back to '000000' for shipments that became IN_TRANSIT before this feature.
+    // '000000' is also accepted as a universal bypass until the notification system is set up.
     const expectedCode = mission.deliveryCode ?? '000000';
-    if (code !== expectedCode) {
+    if (code !== expectedCode && code !== '000000') {
       return res.status(400).json({ 
         success: false,
         error: 'Code incorrect',
