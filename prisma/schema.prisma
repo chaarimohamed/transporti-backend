@@ -42,6 +42,9 @@ model Sender {
   phone       String
   dateOfBirth String?   // JJ/MM/AAAA stored as-is
   
+  // Profile photo (AES-256-CBC encrypted base64)
+  profilePhoto String?
+
   // Password reset
   resetToken       String?   @unique
   resetTokenExpiry DateTime?
@@ -72,8 +75,17 @@ model Carrier {
   license      String?
   matricule    String?
   vehicleType  String?   // VAN, TRUCK, SEMI_TRAILER, DELIVERY_VAN
+  vehicleSize  String?   // S, M, L, XL (taille du véhicule)
   dateOfBirth  String?   // JJ/MM/AAAA stored as-is
   verified     Boolean @default(false)
+
+  // Profile photo (AES-256-CBC encrypted base64)
+  profilePhoto String?
+
+  // Documents (AES-256-CBC encrypted base64 images)
+  cinDoc       String?   // Encrypted CIN photo
+  permisDoc    String?   // Encrypted Permis de conduire photo
+  docsUploadedAt DateTime? // When docs were last uploaded
   
   // Rating fields (computed/cached)
   averageRating Float? @default(0)
@@ -118,6 +130,25 @@ model Shipment {
   // Requested carrier (carrier who expressed interest)
   requestedCarrierId String?
   requestedCarrier   Carrier?       @relation("RequestedShipments", fields: [requestedCarrierId], references: [id], onDelete: SetNull)
+
+  // Sender / recipient contact (when not the logged-in user)
+  senderName           String?
+  senderPhone          String?
+  pickupInstructions   String?
+  recipientName        String?
+  recipientPhone       String?
+  deliveryInstructions String?
+
+  // Helper (porteur) requested at pickup/delivery
+  helperCount          Int     @default(0)  // 0=none, 1=1 person (+15 DT), 2=2 people (+30 DT) — pickup side
+  deliveryHelperCount  Int     @default(0)  // 0=none, 1=1 person (+15 DT), 2=2 people (+30 DT) — delivery side
+
+  // Meeting point preference
+  pickupMeetingPoint   String  @default("vehicle")  // "vehicle" | "home"
+  deliveryMeetingPoint String  @default("vehicle")  // "vehicle" | "home"
+
+  // Package photos (base64-encoded images uploaded by the sender)
+  packagePhotos        String[]
 
   // One-time delivery confirmation code (generated when shipment becomes IN_TRANSIT)
   deliveryCode       String?

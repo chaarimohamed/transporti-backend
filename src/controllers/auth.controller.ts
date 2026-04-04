@@ -19,6 +19,46 @@ export const register = async (req: Request, res: Response) => {
 
     const userRole = role.toLowerCase();
 
+    // --- Format validations ---
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    if (!emailRegex.test(email.trim())) {
+      return res.status(400).json({ success: false, error: 'Adresse email invalide' });
+    }
+
+    // Tunisian phone: 8 digits, optional +216 prefix
+    const phoneRegex = /^(\+216[\s-]?)?\d{8}$/;
+    if (!phoneRegex.test(phone.replace(/\s/g, ''))) {
+      return res.status(400).json({ success: false, error: 'Numéro de téléphone invalide — 8 chiffres requis' });
+    }
+
+    // Password strength: min 8 chars, 1 uppercase, 1 lowercase, 1 digit, 1 special char
+    const passwordRegex = /^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[!@#$%^&*()\-_=+\[\]{};':"\\|,.<>/?]).{8,}$/;
+    if (!passwordRegex.test(password)) {
+      return res.status(400).json({
+        success: false,
+        error: 'Mot de passe trop faible — min. 8 caractères avec majuscule, chiffre et caractère spécial',
+      });
+    }
+
+    if (userRole === 'carrier') {
+      // Immatriculation tunisienne: 1-3 digits, optional space, TN, optional space, 1-4 digits
+      if (license) {
+        const licenseRegex = /^\d{1,3}\s?TN\s?\d{1,4}$/;
+        if (!licenseRegex.test(license.trim())) {
+          return res.status(400).json({ success: false, error: "Format d'immatriculation invalide — ex: 123 TN 4567" });
+        }
+      }
+
+      // Matricule fiscale: exactly 7 digits + 1 letter
+      if (matricule) {
+        const matriculeRegex = /^\d{7}[A-Za-z]$/;
+        if (!matriculeRegex.test(matricule.trim())) {
+          return res.status(400).json({ success: false, error: 'Matricule fiscale invalide — 7 chiffres + 1 lettre (ex: 1234567A)' });
+        }
+      }
+    }
+    // --- End format validations ---
+
     // Check if user already exists in both tables
     const [existingSender, existingCarrier] = await Promise.all([
       prisma.sender.findUnique({ where: { email: email.toLowerCase() } }),
@@ -89,6 +129,7 @@ export const register = async (req: Request, res: Response) => {
           license: true,
           matricule: true,
           vehicleType: true,
+          vehicleSize: true,
           dateOfBirth: true,
           verified: true,
           createdAt: true,
@@ -217,6 +258,7 @@ export const getMe = async (req: any, res: Response) => {
           license: true,
           matricule: true,
           vehicleType: true,
+          vehicleSize: true,
           verified: true,
           createdAt: true,
         },
@@ -324,7 +366,7 @@ export const updateProfile = async (req: any, res: Response) => {
   try {
     const userId = req.user.id;
     const userRole = req.user.role;
-    const { firstName, lastName, email, phone, gouvernorat, vehicleType, dateOfBirth } = req.body;
+    const { firstName, lastName, phone, gouvernorat, vehicleType, vehicleSize, dateOfBirth } = req.body;
 
     let updatedUser;
 
@@ -334,7 +376,6 @@ export const updateProfile = async (req: any, res: Response) => {
         data: {
           ...(firstName && { firstName }),
           ...(lastName && { lastName }),
-          ...(email && { email: email.toLowerCase() }),
           ...(phone && { phone }),
           ...(dateOfBirth !== undefined && { dateOfBirth }),
         },
@@ -354,11 +395,11 @@ export const updateProfile = async (req: any, res: Response) => {
         data: {
           ...(firstName && { firstName }),
           ...(lastName && { lastName }),
-          ...(email && { email: email.toLowerCase() }),
           ...(phone && { phone }),
           // gouvernorat from the form maps to the gouvernerat DB column
           ...(gouvernorat !== undefined && { gouvernerat: gouvernorat }),
           ...(vehicleType !== undefined && { vehicleType }),
+          ...(vehicleSize !== undefined && { vehicleSize }),
           ...(dateOfBirth !== undefined && { dateOfBirth }),
         },
         select: {
@@ -372,6 +413,7 @@ export const updateProfile = async (req: any, res: Response) => {
           license: true,
           matricule: true,
           vehicleType: true,
+          vehicleSize: true,
           verified: true,
           createdAt: true,
         },

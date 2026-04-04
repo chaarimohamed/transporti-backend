@@ -17,6 +17,7 @@ import {
   getAvailableCarriers,
   getInvitedCarriers,
   confirmHandover,
+  uploadShipmentPhotos,
 } from '../controllers/shipment.controller';
 import { auth } from '../middleware/auth';
 
@@ -40,6 +41,7 @@ router.post('/:id/accept-invitation', acceptInvitation); // Carrier accepts invi
 router.post('/:id/accept-carrier', acceptCarrier); // Sender accepts carrier
 router.post('/:id/reject-carrier', rejectCarrier); // Sender rejects carrier
 router.post('/:id/confirm-handover', confirmHandover); // Sender confirms handover to carrier
+router.post('/:id/photos', uploadShipmentPhotos);       // Sender uploads package photos
 router.put('/:id/status', updateShipmentStatus); // Carrier updates status
 router.put('/:id', updateShipment);
 router.delete('/:id', cancelShipment);

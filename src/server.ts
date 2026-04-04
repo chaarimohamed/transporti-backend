@@ -20,8 +20,8 @@ app.use(cors({
   origin: process.env.ALLOWED_ORIGINS?.split(',') || '*',
   credentials: true,
 }));
-app.use(express.json());
-app.use(express.urlencoded({ extended: true }));
+app.use(express.json({ limit: '20mb' }));     // large enough for two base64 images
+app.use(express.urlencoded({ extended: true, limit: '20mb' }));
 
 // Health check route
 app.get('/health', (req, res) => {

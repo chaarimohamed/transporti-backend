@@ -26,6 +26,21 @@ export const createShipment = async (req: any, res: Response) => {
       declaredValue,
       insurance,
       specialInstructions,
+      // Sender / recipient info
+      senderName,
+      senderPhone,
+      pickupInstructions,
+      recipientName,
+      recipientPhone,
+      deliveryInstructions,
+      // Helper (porteur)
+      helperCount,
+      deliveryHelperCount,
+      // Meeting points
+      pickupMeetingPoint,
+      deliveryMeetingPoint,
+      // Package photos
+      packagePhotos,
     } = req.body;
 
     // Validate required fields
@@ -45,8 +60,23 @@ export const createShipment = async (req: any, res: Response) => {
         cargo: cargo || '',
         price: parseFloat(price),
         description: description || '',
-        senderId: req.user.id, // From auth middleware
+        senderId: req.user.id,
         status: ShipmentStatus.PENDING,
+        // Contact info
+        ...(senderName && { senderName }),
+        ...(senderPhone && { senderPhone }),
+        ...(pickupInstructions && { pickupInstructions }),
+        ...(recipientName && { recipientName }),
+        ...(recipientPhone && { recipientPhone }),
+        ...(deliveryInstructions && { deliveryInstructions }),
+        // Helper
+        helperCount: helperCount !== undefined ? parseInt(helperCount) : 0,
+        deliveryHelperCount: deliveryHelperCount !== undefined ? parseInt(deliveryHelperCount) : 0,
+        // Meeting points
+        pickupMeetingPoint: pickupMeetingPoint || 'vehicle',
+        deliveryMeetingPoint: deliveryMeetingPoint || 'vehicle',
+        // Package photos
+        packagePhotos: Array.isArray(packagePhotos) ? packagePhotos : [],
       },
       include: {
         sender: {
@@ -108,7 +138,33 @@ export const getMyShipments = async (req: any, res: Response) => {
 
     const shipments = await prisma.shipment.findMany({
       where,
-      include: {
+      // packagePhotos deliberately excluded from list — only loaded on the detail screen
+      // (each photo is a large base64 string; including them here makes list calls very slow)
+      select: {
+        id: true,
+        refNumber: true,
+        from: true,
+        to: true,
+        cargo: true,
+        price: true,
+        status: true,
+        description: true,
+        senderId: true,
+        carrierId: true,
+        requestedCarrierId: true,
+        senderName: true,
+        senderPhone: true,
+        pickupInstructions: true,
+        recipientName: true,
+        recipientPhone: true,
+        deliveryInstructions: true,
+        helperCount: true,
+        deliveryHelperCount: true,
+        pickupMeetingPoint: true,
+        deliveryMeetingPoint: true,
+        deliveryCode: true,
+        createdAt: true,
+        updatedAt: true,
         carrier: {
           select: {
             id: true,
@@ -167,7 +223,7 @@ export const getMyShipments = async (req: any, res: Response) => {
  */
 export const getAvailableShipments = async (req: any, res: Response) => {
   try {
-    const { status } = req.query;
+    const { status, gouvernerat } = req.query;
 
     // Build where clause - only truly available shipments
     // - PENDING status (not yet requested by any carrier)
@@ -179,9 +235,43 @@ export const getAvailableShipments = async (req: any, res: Response) => {
       requestedCarrierId: null, // No carrier has requested yet
     };
 
+    // Optional: filter by pickup city (gouvernerat)
+    if (gouvernerat && typeof gouvernerat === 'string' && gouvernerat.trim()) {
+      where.from = {
+        contains: gouvernerat.trim(),
+        mode: 'insensitive',
+      };
+    }
+
     const shipments = await prisma.shipment.findMany({
       where,
-      include: {
+      // packagePhotos deliberately excluded from list — only loaded on the detail screen
+      // (each photo is a large base64 string; including them here makes list calls very slow)
+      select: {
+        id: true,
+        refNumber: true,
+        from: true,
+        to: true,
+        cargo: true,
+        price: true,
+        status: true,
+        description: true,
+        senderId: true,
+        carrierId: true,
+        requestedCarrierId: true,
+        senderName: true,
+        senderPhone: true,
+        pickupInstructions: true,
+        recipientName: true,
+        recipientPhone: true,
+        deliveryInstructions: true,
+        helperCount: true,
+        deliveryHelperCount: true,
+        pickupMeetingPoint: true,
+        deliveryMeetingPoint: true,
+        deliveryCode: true,
+        createdAt: true,
+        updatedAt: true,
         sender: {
           select: {
             id: true,
@@ -220,7 +310,32 @@ export const getShipmentById = async (req: any, res: Response) => {
 
     const shipment = await prisma.shipment.findUnique({
       where: { id },
-      include: {
+      select: {
+        // All scalar fields except packagePhotos (heavy base64 arrays)
+        id: true,
+        refNumber: true,
+        from: true,
+        to: true,
+        cargo: true,
+        price: true,
+        status: true,
+        description: true,
+        senderId: true,
+        carrierId: true,
+        requestedCarrierId: true,
+        senderName: true,
+        senderPhone: true,
+        pickupInstructions: true,
+        recipientName: true,
+        recipientPhone: true,
+        deliveryInstructions: true,
+        helperCount: true,
+        deliveryHelperCount: true,
+        pickupMeetingPoint: true,
+        deliveryMeetingPoint: true,
+        deliveryCode: true,
+        createdAt: true,
+        updatedAt: true,
         sender: {
           select: {
             id: true,
@@ -238,6 +353,22 @@ export const getShipmentById = async (req: any, res: Response) => {
             phone: true,
             license: true,
             matricule: true,
+            gouvernerat: true,
+            averageRating: true,
+            totalReviews: true,
+            vehicleType: true,
+          },
+        },
+        requestedCarrier: {
+          select: {
+            id: true,
+            firstName: true,
+            lastName: true,
+            phone: true,
+            gouvernerat: true,
+            averageRating: true,
+            totalReviews: true,
+            vehicleType: true,
           },
         },
       },
@@ -1164,8 +1295,9 @@ export const getCarrierShipmentStats = async (req: any, res: Response) => {
     res.status(200).json({
       success: true,
       stats: {
-        assigned, // Active shipments (CONFIRMED + IN_TRANSIT)
-        inProgress, // Only IN_TRANSIT
+        assigned,   // Assignées: CONFIRMED + IN_TRANSIT
+        applied: pending,  // applied: REQUESTED (carrier applied, awaiting confirmation)
+        inProgress, // Only IN_TRANSIT (kept for backwards compat)
         completed,
         total,
       },
@@ -1352,5 +1484,39 @@ export const confirmHandover = async (req: any, res: Response) => {
   } catch (error) {
     console.error('Confirm handover error:', error);
     res.status(500).json({ success: false, error: 'Erreur lors de la confirmation de la remise' });
+  }
+};
+
+/**
+ * POST /shipments/:id/photos
+ * Upload / replace package photos for a shipment (sender only).
+ * Accepts { packagePhotos: string[] } where each item is a base64 image.
+ */
+export const uploadShipmentPhotos = async (req: any, res: Response) => {
+  try {
+    const { id } = req.params;
+    const { packagePhotos } = req.body;
+
+    if (!Array.isArray(packagePhotos)) {
+      return res.status(400).json({ success: false, error: 'packagePhotos must be an array' });
+    }
+
+    const shipment = await prisma.shipment.findUnique({ where: { id } });
+    if (!shipment) {
+      return res.status(404).json({ success: false, error: 'Expédition introuvable' });
+    }
+    if (shipment.senderId !== req.user.id) {
+      return res.status(403).json({ success: false, error: 'Non autorisé' });
+    }
+
+    await prisma.shipment.update({
+      where: { id },
+      data: { packagePhotos },
+    });
+
+    res.status(200).json({ success: true });
+  } catch (error) {
+    console.error('Upload shipment photos error:', error);
+    res.status(500).json({ success: false, error: 'Erreur lors du téléchargement des photos' });
   }
 };
