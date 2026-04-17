@@ -3,6 +3,7 @@ import bcrypt from 'bcrypt';
 import jwt from 'jsonwebtoken';
 import crypto from 'crypto';
 import prisma from '../config/database';
+import { env } from '../config/env';
 
 // Register new user
 export const register = async (req: Request, res: Response) => {
@@ -101,8 +102,8 @@ export const register = async (req: Request, res: Response) => {
       // Generate JWT token
       token = jwt.sign(
         { id: user.id, email: user.email, role: 'sender' },
-        process.env.JWT_SECRET!,
-        { expiresIn: process.env.JWT_EXPIRES_IN || '7d' }
+        env.jwtSecret,
+        { expiresIn: env.jwtExpiresIn }
       );
     } else {
       // Create carrier
@@ -139,8 +140,8 @@ export const register = async (req: Request, res: Response) => {
       // Generate JWT token
       token = jwt.sign(
         { id: user.id, email: user.email, role: 'carrier' },
-        process.env.JWT_SECRET!,
-        { expiresIn: process.env.JWT_EXPIRES_IN || '7d' }
+        env.jwtSecret,
+        { expiresIn: env.jwtExpiresIn }
       );
     }
 
@@ -202,8 +203,8 @@ export const login = async (req: Request, res: Response) => {
     // Generate JWT token
     const token = jwt.sign(
       { id: user.id, email: user.email, role: userRole },
-      process.env.JWT_SECRET!,
-      { expiresIn: process.env.JWT_EXPIRES_IN || '7d' }
+      env.jwtSecret,
+      { expiresIn: env.jwtExpiresIn }
     );
 
     // Remove password from response

@@ -1,8 +1,9 @@
 import { PrismaClient } from '@prisma/client';
+import { env } from './env';
 
 // Initialize Prisma Client
 const prisma = new PrismaClient({
-  log: process.env.NODE_ENV === 'development' ? ['query', 'error', 'warn'] : ['error'],
+  log: env.nodeEnv === 'development' ? ['query', 'error', 'warn'] : ['error'],
 });
 
 // Handle connection events

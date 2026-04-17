@@ -1,5 +1,6 @@
 import { Request, Response, NextFunction } from 'express';
 import jwt from 'jsonwebtoken';
+import { env } from '../config/env';
 
 // Extend Express Request to include user
 export interface AuthRequest extends Request {
@@ -24,7 +25,7 @@ export const auth = async (req: AuthRequest, res: Response, next: NextFunction) 
     }
 
     // Verify token
-    const decoded = jwt.verify(token, process.env.JWT_SECRET!) as {
+    const decoded = jwt.verify(token, env.jwtSecret) as {
       id: string;
       email: string;
       role: string;
@@ -43,7 +44,7 @@ export const auth = async (req: AuthRequest, res: Response, next: NextFunction) 
 
 // Check if user is a sender
 export const isSender = (req: AuthRequest, res: Response, next: NextFunction) => {
-  if (req.user?.role !== 'SENDER') {
+  if (req.user?.role !== 'sender') {
     return res.status(403).json({
       success: false,
       error: 'Accès réservé aux expéditeurs',
@@ -54,7 +55,7 @@ export const isSender = (req: AuthRequest, res: Response, next: NextFunction) =>
 
 // Check if user is a carrier
 export const isCarrier = (req: AuthRequest, res: Response, next: NextFunction) => {
-  if (req.user?.role !== 'CARRIER') {
+  if (req.user?.role !== 'carrier') {
     return res.status(403).json({
       success: false,
       error: 'Accès réservé aux transporteurs',

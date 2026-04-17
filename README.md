@@ -28,6 +28,7 @@ Update the `.env` file with your database credentials:
 ```env
 DATABASE_URL="postgresql://postgres:YOUR_PASSWORD@localhost:5432/transporti?schema=public"
 JWT_SECRET="your-super-secret-jwt-key-change-this"
+DOCUMENTS_ENCRYPTION_KEY="0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
 ```
 
 ### 3. Setup Database
@@ -46,6 +47,8 @@ npm run dev
 ```
 
 The API will be available at `http://localhost:3000`
+
+When the backend starts it now prints each detected LAN URL, which is the address mobile devices on the same network should use.
 
 ## 📋 API Endpoints
 
@@ -180,11 +183,13 @@ Opens at `http://localhost:5555`
 
 ## 🌐 CORS Configuration
 
-Update `ALLOWED_ORIGINS` in `.env` to match your mobile app:
+Use `ALLOWED_ORIGINS="*"` for local development, or provide a comma-separated allowlist for deployed clients:
 
 ```env
-ALLOWED_ORIGINS="http://localhost:8081,exp://your-tunnel-url"
+ALLOWED_ORIGINS="https://app.transporti.tn,https://admin.transporti.tn"
 ```
+
+Native mobile requests without a browser `Origin` header are still accepted.
 
 ## 📦 Project Structure
 
@@ -224,6 +229,12 @@ Change the port in `.env`:
 ```env
 PORT=3001
 ```
+
+### Expo Go / Device Cannot Reach the Backend
+
+1. Start the backend and note the printed `Mobile access` LAN URL
+2. Set `EXPO_PUBLIC_API_URL` in `transporti-mobile/.env` to that URL with the `/api` suffix
+3. Use Expo LAN mode by default; tunnel mode only changes how Metro is exposed, not your backend reachability
 
 ## 📝 Next Steps
 

@@ -28,7 +28,7 @@ echo ""
 echo "📱 Updating mobile app configuration..."
 
 # Update the mobile app config
-CONFIG_FILE="../mobile-app/config/api.config.ts"
+CONFIG_FILE="../transporti-mobile/config/api.config.ts"
 sed -i "s|return 'http://.*:3000/api';|return '${NGROK_URL}/api';|g" "$CONFIG_FILE"
 sed -i "s|return 'https://.*\\.ngrok-free\\.app/api';|return '${NGROK_URL}/api';|g" "$CONFIG_FILE"
 
