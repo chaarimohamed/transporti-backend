@@ -55,6 +55,15 @@ app.use('/api/notifications', notificationRoutes);
 app.use(notFound);
 app.use(errorHandler);
 
+const gracefulShutdown = async (signal: string) => {
+  console.log(`⚠️  ${signal} received, shutting down gracefully...`);
+  server.close(async () => {
+    await prisma.$disconnect();
+    console.log('👋 Server closed');
+    process.exit(0);
+  });
+};
+
 // Start server
 const server = app.listen(env.port, '0.0.0.0', () => {
   console.log(`🚀 Server is running on http://localhost:${env.port}`);
@@ -71,23 +80,17 @@ const server = app.listen(env.port, '0.0.0.0', () => {
   console.log(`📊 Environment: ${env.nodeEnv}`);
 });
 
-// Graceful shutdown
-process.on('SIGTERM', async () => {
-  console.log('⚠️  SIGTERM received, shutting down gracefully...');
-  server.close(async () => {
-    await prisma.$disconnect();
-    console.log('👋 Server closed');
-    process.exit(0);
-  });
+server.on('error', async (err: NodeJS.ErrnoException) => {
+  if (err.code === 'EADDRINUSE') {
+    console.error(`❌ Port ${env.port} is already in use. Stop the existing process and retry.`);
+  } else {
+    console.error('❌ Server error:', err.message);
+  }
+  await prisma.$disconnect();
+  process.exit(1);
 });
 
-process.on('SIGINT', async () => {
-  console.log('⚠️  SIGINT received, shutting down gracefully...');
-  server.close(async () => {
-    await prisma.$disconnect();
-    console.log('👋 Server closed');
-    process.exit(0);
-  });
-});
+process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
+process.on('SIGINT',  () => gracefulShutdown('SIGINT'));
 
 export default app;
