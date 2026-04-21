@@ -45,6 +45,10 @@ model Sender {
   // Profile photo (AES-256-CBC encrypted base64)
   profilePhoto String?
 
+  // Rating fields (computed/cached)
+  averageRating Float? @default(0)
+  totalReviews  Int    @default(0)
+
   // Password reset
   resetToken       String?   @unique
   resetTokenExpiry DateTime?
@@ -56,7 +60,7 @@ model Sender {
   // Relations
   shipments     Shipment[]
   notifications Notification[]
-  reviews       Review[]
+  feedbackEntries ShipmentFeedback[]
   
   @@map("senders")
 }
@@ -103,7 +107,7 @@ model Carrier {
   shipments          Shipment[]
   requestedShipments Shipment[]     @relation("RequestedShipments")
   notifications      Notification[]
-  reviews            Review[]
+  feedbackEntries    ShipmentFeedback[]
   
   @@map("carriers")
 }
@@ -153,8 +157,8 @@ model Shipment {
   // One-time delivery confirmation code (generated when shipment becomes IN_TRANSIT)
   deliveryCode       String?
   
-  // Review relation (optional - one review per shipment)
-  review Review?
+  // Feedback relation (optional - one record per shipment, one entry per party)
+  feedback ShipmentFeedback?
   
   // Timestamps
   createdAt   DateTime       @default(now())
@@ -194,29 +198,33 @@ model Notification {
   @@index([carrierId, read])
 }
 
-// Review model
-model Review {
-  id      String @id @default(uuid())
-  rating  Float  // 0-5 star rating
-  comment String? // Optional text feedback
-  
-  // Carrier being reviewed
-  carrierId String
-  carrier   Carrier @relation(fields: [carrierId], references: [id], onDelete: Cascade)
-  
-  // Sender who wrote the review
-  senderId String
-  sender   Sender @relation(fields: [senderId], references: [id], onDelete: Cascade)
-  
-  // Shipment this review is for (one review per shipment)
+// Shipment feedback model
+model ShipmentFeedback {
+  id      String  @id @default(uuid())
+
+  // Shipment / parties
   shipmentId String   @unique
   shipment   Shipment @relation(fields: [shipmentId], references: [id], onDelete: Cascade)
-  
+  senderId   String
+  sender     Sender   @relation(fields: [senderId], references: [id], onDelete: Cascade)
+  carrierId  String
+  carrier    Carrier  @relation(fields: [carrierId], references: [id], onDelete: Cascade)
+
+  // Sender evaluates carrier
+  senderToCarrierRating      Int?
+  senderToCarrierComment     String?
+  senderToCarrierSubmittedAt DateTime?
+
+  // Carrier evaluates sender
+  carrierToSenderRating      Int?
+  carrierToSenderComment     String?
+  carrierToSenderSubmittedAt DateTime?
+
   // Timestamps
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
-  
-  @@map("reviews")
-  @@index([carrierId])
+
+  @@map("shipment_feedback")
   @@index([senderId])
+  @@index([carrierId])
 }

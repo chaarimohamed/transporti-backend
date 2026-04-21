@@ -1,44 +1,83 @@
-#!/bin/bash
+#!/usr/bin/env bash
 
-# Start ngrok and backend server together
-# This script starts ngrok in the background and updates the mobile app config
+# Start backend + ngrok and write EXPO_PUBLIC_API_URL for mobile.
+set -e
 
-echo "🔧 Starting ngrok tunnel on port 3000..."
+ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+BACKEND_DIR="$ROOT_DIR/transporti-backend"
+MOBILE_ENV="$ROOT_DIR/transporti-mobile/.env"
 
-# Start ngrok in the background and capture output
-ngrok http 3000 --log=stdout > /tmp/ngrok.log &
-NGROK_PID=$!
+cleanup() {
+    if [ -n "$NGROK_PID" ]; then
+        kill "$NGROK_PID" 2>/dev/null || true
+    fi
+}
+trap cleanup EXIT INT TERM
 
-echo "⏳ Waiting for ngrok to start..."
+echo "🔧 Starting backend API on port 3000..."
+EXISTING_BACKEND_PID=$(ss -ltnp 2>/dev/null | sed -n 's/.*:3000 .*pid=\([0-9]\+\).*/\1/p' | head -1)
+if [ -n "$EXISTING_BACKEND_PID" ]; then
+    echo "ℹ️ Backend already running on port 3000 (pid ${EXISTING_BACKEND_PID}), reusing it."
+    BACKEND_PID=""
+else
+    (
+        cd "$BACKEND_DIR"
+        npm run dev
+    ) &
+    BACKEND_PID=$!
+fi
+
+echo "⏳ Waiting for backend to boot..."
 sleep 3
 
-# Get the ngrok public URL
-NGROK_URL=$(curl -s http://localhost:4040/api/tunnels | grep -o '"public_url":"https://[^"]*' | grep -o 'https://[^"]*' | head -1)
+echo "🌐 Starting ngrok tunnel for backend..."
+if command -v ngrok >/dev/null 2>&1; then
+    ngrok http 3000 --log=stdout > /tmp/transporti-ngrok.log 2>&1 &
+else
+    npx ngrok http 3000 --log=stdout > /tmp/transporti-ngrok.log 2>&1 &
+fi
+NGROK_PID=$!
+
+echo "⏳ Waiting for ngrok URL..."
+attempt=0
+NGROK_URL=""
+while [ $attempt -lt 20 ]; do
+    NGROK_URL=$(curl -s http://127.0.0.1:4040/api/tunnels | grep -o '"public_url":"https://[^"]*' | grep -o 'https://[^"]*' | head -1 || true)
+    if [ -n "$NGROK_URL" ]; then
+        break
+    fi
+    attempt=$((attempt + 1))
+    sleep 1
+done
 
 if [ -z "$NGROK_URL" ]; then
-    echo "❌ Failed to get ngrok URL. Make sure ngrok is authenticated."
-    echo "Run: ngrok config add-authtoken YOUR_TOKEN"
-    echo "Get your token from: https://dashboard.ngrok.com/get-started/your-authtoken"
-    kill $NGROK_PID 2>/dev/null
+    echo "❌ Failed to get ngrok URL."
+    echo "Check ngrok auth: ngrok config add-authtoken YOUR_TOKEN"
+    echo "ngrok logs: /tmp/transporti-ngrok.log"
     exit 1
 fi
 
-echo "✅ ngrok tunnel created: $NGROK_URL"
-echo ""
-echo "📱 Updating mobile app configuration..."
+PUBLIC_API_URL="${NGROK_URL}/api"
+echo "$PUBLIC_API_URL" > "$ROOT_DIR/.backend-public-url"
 
-# Update the mobile app config
-CONFIG_FILE="../mobile-app/config/api.config.ts"
-sed -i "s|return 'http://.*:3000/api';|return '${NGROK_URL}/api';|g" "$CONFIG_FILE"
-sed -i "s|return 'https://.*\\.ngrok-free\\.app/api';|return '${NGROK_URL}/api';|g" "$CONFIG_FILE"
+if [ -f "$MOBILE_ENV" ]; then
+    if sed --version >/dev/null 2>&1; then
+        sed -i "s|EXPO_PUBLIC_API_URL=.*|EXPO_PUBLIC_API_URL=${PUBLIC_API_URL}|" "$MOBILE_ENV"
+    else
+        sed -i '' "s|EXPO_PUBLIC_API_URL=.*|EXPO_PUBLIC_API_URL=${PUBLIC_API_URL}|" "$MOBILE_ENV"
+    fi
+fi
 
-echo "✅ Mobile app config updated!"
+echo "✅ Backend public URL: $NGROK_URL"
+echo "✅ Mobile API URL set to: $PUBLIC_API_URL"
 echo ""
-echo "🚀 Your backend URL is: $NGROK_URL"
-echo "📱 Mobile app will connect to: ${NGROK_URL}/api"
-echo ""
-echo "Now starting the backend server..."
+echo "Now run in another terminal:"
+echo "  cd transporti-mobile && npm run start:tunnel"
 echo ""
 
-# Start the backend server
-npm run dev
+if [ -n "$BACKEND_PID" ]; then
+    wait "$BACKEND_PID"
+else
+    # Keep script alive while ngrok runs when backend is reused.
+    wait "$NGROK_PID"
+fi

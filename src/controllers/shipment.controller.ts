@@ -7,6 +7,71 @@ const generateRefNumber = () => {
   return `EXP-${Math.floor(1000 + Math.random() * 9000)}`;
 };
 
+const getFeedbackSummary = (shipment: any, user: any) => {
+  const isSender = shipment.senderId === user.id;
+  const isCarrier = shipment.carrierId === user.id;
+  const hasCarrier = Boolean(shipment.carrierId);
+  const isDelivered = shipment.status === ShipmentStatus.DELIVERED;
+  const hasSubmitted = isSender
+    ? Boolean(shipment.feedback?.senderToCarrierSubmittedAt)
+    : isCarrier
+      ? Boolean(shipment.feedback?.carrierToSenderSubmittedAt)
+      : false;
+
+  return {
+    pendingForCurrentUser: isDelivered && hasCarrier && (isSender || isCarrier) && !hasSubmitted,
+    hasSubmitted,
+    canSubmit: isDelivered && hasCarrier && (isSender || isCarrier),
+    targetRole: isSender ? 'carrier' : isCarrier ? 'sender' : null,
+  };
+};
+
+const recalculateCarrierRating = async (carrierId: string) => {
+  const stats = await prisma.shipmentFeedback.aggregate({
+    where: {
+      carrierId,
+      senderToCarrierRating: { not: null },
+    },
+    _avg: {
+      senderToCarrierRating: true,
+    },
+    _count: {
+      senderToCarrierRating: true,
+    },
+  });
+
+  await prisma.carrier.update({
+    where: { id: carrierId },
+    data: {
+      averageRating: stats._avg.senderToCarrierRating ?? 0,
+      totalReviews: stats._count.senderToCarrierRating,
+    },
+  });
+};
+
+const recalculateSenderRating = async (senderId: string) => {
+  const stats = await prisma.shipmentFeedback.aggregate({
+    where: {
+      senderId,
+      carrierToSenderRating: { not: null },
+    },
+    _avg: {
+      carrierToSenderRating: true,
+    },
+    _count: {
+      carrierToSenderRating: true,
+    },
+  });
+
+  await prisma.sender.update({
+    where: { id: senderId },
+    data: {
+      averageRating: stats._avg.carrierToSenderRating ?? 0,
+      totalReviews: stats._count.carrierToSenderRating,
+    },
+  });
+};
+
 /**
  * Create new shipment
  * POST /api/shipments
@@ -343,6 +408,8 @@ export const getShipmentById = async (req: any, res: Response) => {
             lastName: true,
             phone: true,
             email: true,
+            averageRating: true,
+            totalReviews: true,
           },
         },
         carrier: {
@@ -369,6 +436,17 @@ export const getShipmentById = async (req: any, res: Response) => {
             averageRating: true,
             totalReviews: true,
             vehicleType: true,
+          },
+        },
+        feedback: {
+          select: {
+            id: true,
+            senderToCarrierRating: true,
+            senderToCarrierComment: true,
+            senderToCarrierSubmittedAt: true,
+            carrierToSenderRating: true,
+            carrierToSenderComment: true,
+            carrierToSenderSubmittedAt: true,
           },
         },
       },
@@ -421,13 +499,152 @@ export const getShipmentById = async (req: any, res: Response) => {
 
     res.status(200).json({
       success: true,
-      data: shipment,
+      data: {
+        ...shipment,
+        feedbackSummary: getFeedbackSummary(shipment, req.user),
+      },
     });
   } catch (error) {
     console.error('Get shipment error:', error);
     res.status(500).json({
       success: false,
       error: 'Erreur lors de la récupération de l\'expédition',
+    });
+  }
+};
+
+/**
+ * Submit shipment feedback for the authenticated sender or carrier
+ * POST /api/shipments/:id/feedback
+ */
+export const submitShipmentFeedback = async (req: any, res: Response) => {
+  try {
+    const { id } = req.params;
+    const { rating, comment } = req.body;
+    const numericRating = Number(rating);
+
+    if (!Number.isInteger(numericRating) || numericRating < 1 || numericRating > 5) {
+      return res.status(400).json({
+        success: false,
+        error: 'La note doit être un entier entre 1 et 5',
+      });
+    }
+
+    const shipment = await prisma.shipment.findUnique({
+      where: { id },
+      select: {
+        id: true,
+        refNumber: true,
+        status: true,
+        senderId: true,
+        carrierId: true,
+        feedback: {
+          select: {
+            id: true,
+            senderToCarrierSubmittedAt: true,
+            carrierToSenderSubmittedAt: true,
+          },
+        },
+      },
+    });
+
+    if (!shipment) {
+      return res.status(404).json({
+        success: false,
+        error: 'Expédition introuvable',
+      });
+    }
+
+    if (shipment.status !== ShipmentStatus.DELIVERED) {
+      return res.status(400).json({
+        success: false,
+        error: 'Vous pouvez laisser une évaluation uniquement après la livraison',
+      });
+    }
+
+    if (!shipment.carrierId) {
+      return res.status(400).json({
+        success: false,
+        error: 'Aucun transporteur n\'est associé à cette expédition',
+      });
+    }
+
+    const isSender = shipment.senderId === req.user.id;
+    const isCarrier = shipment.carrierId === req.user.id;
+
+    if (!isSender && !isCarrier) {
+      return res.status(403).json({
+        success: false,
+        error: 'Accès non autorisé',
+      });
+    }
+
+    const sanitizedComment = typeof comment === 'string' && comment.trim().length > 0
+      ? comment.trim().slice(0, 500)
+      : null;
+    const now = new Date();
+
+    const feedback = await prisma.shipmentFeedback.upsert({
+      where: { shipmentId: shipment.id },
+      create: {
+        shipmentId: shipment.id,
+        senderId: shipment.senderId,
+        carrierId: shipment.carrierId,
+        ...(isSender
+          ? {
+              senderToCarrierRating: numericRating,
+              senderToCarrierComment: sanitizedComment,
+              senderToCarrierSubmittedAt: now,
+            }
+          : {
+              carrierToSenderRating: numericRating,
+              carrierToSenderComment: sanitizedComment,
+              carrierToSenderSubmittedAt: now,
+            }),
+      },
+      update: isSender
+        ? {
+            senderToCarrierRating: numericRating,
+            senderToCarrierComment: sanitizedComment,
+            senderToCarrierSubmittedAt: now,
+          }
+        : {
+            carrierToSenderRating: numericRating,
+            carrierToSenderComment: sanitizedComment,
+            carrierToSenderSubmittedAt: now,
+          },
+      select: {
+        id: true,
+        senderToCarrierRating: true,
+        senderToCarrierComment: true,
+        senderToCarrierSubmittedAt: true,
+        carrierToSenderRating: true,
+        carrierToSenderComment: true,
+        carrierToSenderSubmittedAt: true,
+      },
+    });
+
+    if (isSender) {
+      await recalculateCarrierRating(shipment.carrierId);
+    } else {
+      await recalculateSenderRating(shipment.senderId);
+    }
+
+    res.status(200).json({
+      success: true,
+      message: isSender
+        ? 'Votre évaluation du transporteur a été enregistrée'
+        : 'Votre évaluation de l\'expéditeur a été enregistrée',
+      data: {
+        feedback,
+        feedbackSummary: getFeedbackSummary({ ...shipment, feedback }, req.user),
+      },
+    });
+  } catch (error) {
+    console.error('Submit shipment feedback error:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Erreur lors de l\'enregistrement de l\'évaluation',
     });
   }
 };
