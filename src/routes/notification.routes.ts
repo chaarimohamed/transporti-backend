@@ -5,6 +5,7 @@ import {
   markAsRead,
   markAllAsRead,
   deleteNotification,
+  registerPushToken,
 } from '../controllers/notification.controller';
 import { auth } from '../middleware/auth';
 
@@ -19,5 +20,6 @@ router.get('/unread-count', getUnreadCount);
 router.put('/read-all', markAllAsRead);
 router.put('/:id/read', markAsRead);
 router.delete('/:id', deleteNotification);
+router.post('/register-token', registerPushToken);
 
 export default router;

@@ -1,6 +1,7 @@
 import { Request, Response } from 'express';
 import prisma from '../config/database';
 import { ShipmentStatus } from '@prisma/client';
+import { sendPushNotification } from '../utils/pushNotification';
 
 // Generate reference number for shipments
 const generateRefNumber = () => {
@@ -752,6 +753,15 @@ export const requestShipment = async (req: any, res: Response) => {
       },
     });
 
+    // Send push notification to sender
+    const senderRecord = await prisma.sender.findUnique({ where: { id: shipment.senderId }, select: { pushToken: true } });
+    await sendPushNotification(
+      [senderRecord?.pushToken],
+      'Nouvelle candidature',
+      `Un transporteur souhaite prendre votre expédition ${shipment.refNumber}`,
+      { shipmentId: shipment.id }
+    );
+
     // TODO: Send push notification to sender
     console.log(`Notification: Carrier ${req.user.id} requested shipment ${shipment.refNumber} from sender ${shipment.sender.email}`);
 
@@ -857,6 +867,15 @@ export const inviteCarrier = async (req: any, res: Response) => {
         },
       },
     });
+
+    // Send push notification to carrier
+    const carrierRecord = await prisma.carrier.findUnique({ where: { id: carrierId }, select: { pushToken: true } });
+    await sendPushNotification(
+      [carrierRecord?.pushToken],
+      'Nouvelle invitation',
+      `${shipment.sender.firstName} ${shipment.sender.lastName} vous invite à prendre en charge l'expédition ${shipment.refNumber}`,
+      { shipmentId: shipment.id }
+    );
 
     console.log(`📧 Invitation sent: Sender ${shipment.sender.email} invited carrier ${carrier.email} for shipment ${shipment.refNumber}`);
 
@@ -965,6 +984,15 @@ export const acceptInvitation = async (req: any, res: Response) => {
       },
     });
 
+    // Send push notification to sender
+    const senderForInvite = await prisma.sender.findUnique({ where: { id: shipment.senderId }, select: { pushToken: true } });
+    await sendPushNotification(
+      [senderForInvite?.pushToken],
+      'Invitation acceptée',
+      `Le transporteur a accepté votre invitation pour l'expédition ${shipment.refNumber}`,
+      { shipmentId: shipment.id }
+    );
+
     // Delete the invitation notification for the carrier
     await prisma.notification.deleteMany({
       where: {
@@ -1071,6 +1099,15 @@ export const acceptCarrier = async (req: any, res: Response) => {
       },
     });
 
+    // Send push notification to carrier
+    const carrierForAccept = await prisma.carrier.findUnique({ where: { id: shipment.requestedCarrierId! }, select: { pushToken: true } });
+    await sendPushNotification(
+      [carrierForAccept?.pushToken],
+      'Candidature acceptée',
+      `Votre candidature pour l'expédition ${shipment.refNumber} a été acceptée`,
+      { shipmentId: shipment.id }
+    );
+
     res.status(200).json({
       success: true,
       message: 'Transporteur accepté avec succès',
@@ -1135,6 +1172,15 @@ export const rejectCarrier = async (req: any, res: Response) => {
         },
       },
     });
+
+    // Send push notification to carrier
+    const carrierForReject = await prisma.carrier.findUnique({ where: { id: shipment.requestedCarrierId! }, select: { pushToken: true } });
+    await sendPushNotification(
+      [carrierForReject?.pushToken],
+      'Candidature refusée',
+      `Votre candidature pour l'expédition ${shipment.refNumber} a été refusée`,
+      { shipmentId: id }
+    );
 
     // Reset shipment back to PENDING so a new carrier can apply
     const resetShipment = await prisma.shipment.update({
@@ -1390,6 +1436,17 @@ export const updateShipmentStatus = async (req: any, res: Response) => {
         read: false,
       },
     });
+
+    // Send push notification to sender
+    const senderForStatus = await prisma.sender.findUnique({ where: { id: shipment.senderId }, select: { pushToken: true } });
+    await sendPushNotification(
+      [senderForStatus?.pushToken],
+      newStatus === 'IN_TRANSIT' ? 'Expédition en transit' : 'Expédition livrée',
+      newStatus === 'IN_TRANSIT'
+        ? `L'expédition ${shipment.refNumber} est maintenant en transit`
+        : `L'expédition ${shipment.refNumber} a été livrée`,
+      { shipmentId: shipment.id }
+    );
 
     console.log('✅ Shipment status updated:', { id, newStatus });
 
@@ -1681,6 +1738,16 @@ export const confirmHandover = async (req: any, res: Response) => {
           data: { shipmentId: shipment.id, shipmentRefNumber: shipment.refNumber, deliveryCode },
         },
       });
+
+      // Send push notification to carrier
+      const carrierForHandover = await prisma.carrier.findUnique({ where: { id: shipment.carrierId }, select: { pushToken: true } });
+      await sendPushNotification(
+        [carrierForHandover?.pushToken],
+        '✅ Remise confirmée',
+        `Code de livraison : ${deliveryCode} — Bonne route !`,
+        { shipmentId: shipment.id, deliveryCode }
+      );
+
       console.log(`🔔 HANDOVER_CONFIRMED notification sent to carrier ${shipment.carrierId} for shipment ${shipment.refNumber}`);
     }
 
@@ -1695,6 +1762,15 @@ export const confirmHandover = async (req: any, res: Response) => {
         data: { shipmentId: shipment.id, shipmentRefNumber: shipment.refNumber, deliveryCode },
       },
     });
+
+    // Send push notification to sender
+    const senderForTransit = await prisma.sender.findUnique({ where: { id: shipment.senderId }, select: { pushToken: true } });
+    await sendPushNotification(
+      [senderForTransit?.pushToken],
+      '🚚 En route — Code de livraison',
+      `Votre colis (${shipment.refNumber}) est en route. Code : ${deliveryCode}`,
+      { shipmentId: shipment.id, deliveryCode }
+    );
 
     console.log(`✅ Handover confirmed — shipment ${shipment.refNumber} is now IN_TRANSIT, code: ${deliveryCode}`);
     res.status(200).json({ success: true, data: updatedShipment });

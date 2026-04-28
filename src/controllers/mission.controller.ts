@@ -1,6 +1,7 @@
 import { Request, Response } from 'express';
 import { ShipmentStatus } from '@prisma/client';
 import prisma from '../config/database';
+import { sendPushNotification } from '../utils/pushNotification';
 
 // Get available missions (for carriers to browse)
 export const getAvailableMissions = async (req: Request, res: Response) => {
@@ -156,6 +157,13 @@ export const acceptMission = async (req: Request, res: Response) => {
           },
         },
       });
+      const senderForAccept = await prisma.sender.findUnique({ where: { id: mission.senderId }, select: { pushToken: true } });
+      await sendPushNotification(
+        [senderForAccept?.pushToken],
+        '✅ Transporteur confirmé',
+        `Un transporteur a accepté votre expédition ${mission.refNumber}. La livraison est maintenant confirmée.`,
+        { shipmentId: id }
+      );
       console.log(`🔔 Notification sent to sender ${mission.senderId} — carrier accepted mission ${mission.refNumber}`);
     }
 
@@ -228,6 +236,13 @@ export const updateMissionStatus = async (req: Request, res: Response) => {
             data: { shipmentId: mission.id, shipmentRefNumber: mission.refNumber },
           },
         });
+        const senderForHandover = await prisma.sender.findUnique({ where: { id: mission.senderId }, select: { pushToken: true } });
+        await sendPushNotification(
+          [senderForHandover?.pushToken],
+          '📦 Remise du colis',
+          `Le transporteur est arrivé pour récupérer votre colis (${mission.refNumber}). Veuillez confirmer que vous lui avez remis le colis.`,
+          { shipmentId: mission.id }
+        );
         console.log(`🔔 HANDOVER_REQUESTED notification sent to sender ${mission.senderId} for mission ${mission.refNumber}`);
       }
 
@@ -270,6 +285,13 @@ export const updateMissionStatus = async (req: Request, res: Response) => {
           data: { shipmentId: mission.id, shipmentRefNumber: mission.refNumber },
         },
       });
+      const senderForTransit = await prisma.sender.findUnique({ where: { id: mission.senderId }, select: { pushToken: true } });
+      await sendPushNotification(
+        [senderForTransit?.pushToken],
+        '🚚 En route',
+        `Le transporteur a récupéré votre colis (${mission.refNumber}) et est en route vers la destination.`,
+        { shipmentId: mission.id }
+      );
       console.log(`🔔 IN_TRANSIT notification sent to sender ${mission.senderId} for mission ${mission.refNumber}`);
     }
 
@@ -361,6 +383,13 @@ export const confirmDelivery = async (req: Request, res: Response) => {
           data: { shipmentId: mission.id, shipmentRefNumber: mission.refNumber },
         },
       });
+      const senderForDelivery = await prisma.sender.findUnique({ where: { id: mission.senderId }, select: { pushToken: true } });
+      await sendPushNotification(
+        [senderForDelivery?.pushToken],
+        '🎉 Livraison confirmée',
+        `Votre colis (${mission.refNumber}) a été livré avec succès.`,
+        { shipmentId: mission.id }
+      );
       console.log(`🔔 DELIVERED notification sent to sender ${mission.senderId} for mission ${mission.refNumber}`);
     }
 

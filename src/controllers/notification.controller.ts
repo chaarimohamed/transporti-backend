@@ -1,5 +1,6 @@
 import { Response } from 'express';
 import { PrismaClient } from '@prisma/client';
+import { Expo } from 'expo-server-sdk';
 
 const prisma = new PrismaClient();
 
@@ -202,6 +203,56 @@ export const deleteNotification = async (req: any, res: Response) => {
     res.status(500).json({
       success: false,
       error: 'Erreur lors de la suppression',
+    });
+  }
+};
+
+/**
+ * Register or update Expo push token for the authenticated user
+ * POST /api/notifications/register-token
+ */
+export const registerPushToken = async (req: any, res: Response) => {
+  try {
+    const { token } = req.body;
+
+    if (!token || typeof token !== 'string') {
+      return res.status(400).json({
+        success: false,
+        error: 'Token invalide',
+      });
+    }
+
+    if (!Expo.isExpoPushToken(token)) {
+      return res.status(400).json({
+        success: false,
+        error: 'Le token fourni n\'est pas un token Expo valide',
+      });
+    }
+
+    const userId = req.user.id;
+    const userRole = req.user.role;
+
+    if (userRole === 'sender') {
+      await prisma.sender.update({
+        where: { id: userId },
+        data: { pushToken: token },
+      });
+    } else {
+      await prisma.carrier.update({
+        where: { id: userId },
+        data: { pushToken: token },
+      });
+    }
+
+    res.status(200).json({
+      success: true,
+      message: 'Token enregistré avec succès',
+    });
+  } catch (error) {
+    console.error('Register push token error:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Erreur lors de l\'enregistrement du token',
     });
   }
 };
