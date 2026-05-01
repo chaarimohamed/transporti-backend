@@ -6,11 +6,16 @@ set -e
 ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 BACKEND_DIR="$ROOT_DIR/transporti-backend"
 MOBILE_ENV="$ROOT_DIR/transporti-mobile/.env"
+NGROK_API_HOST="localhost"
+NGROK_API_PORT="4041"
+NGROK_BASE_CONFIG="${XDG_CONFIG_HOME:-$HOME/.config}/ngrok/ngrok.yml"
+NGROK_OVERRIDE_CONFIG="$(mktemp)"
 
 cleanup() {
     if [ -n "$NGROK_PID" ]; then
         kill "$NGROK_PID" 2>/dev/null || true
     fi
+    rm -f "$NGROK_OVERRIDE_CONFIG"
 }
 trap cleanup EXIT INT TERM
 
@@ -31,10 +36,21 @@ echo "⏳ Waiting for backend to boot..."
 sleep 3
 
 echo "🌐 Starting ngrok tunnel for backend..."
+cat > "$NGROK_OVERRIDE_CONFIG" <<EOF
+version: "3"
+agent:
+    web_addr: ${NGROK_API_HOST}:${NGROK_API_PORT}
+EOF
+
 if command -v ngrok >/dev/null 2>&1; then
-    ngrok http 3000 --log=stdout > /tmp/transporti-ngrok.log 2>&1 &
+    if [ -f "$NGROK_BASE_CONFIG" ]; then
+        ngrok http --config "$NGROK_BASE_CONFIG" --config "$NGROK_OVERRIDE_CONFIG" localhost:3000 --log=stdout > /tmp/transporti-ngrok.log 2>&1 &
+    else
+        ngrok http --config "$NGROK_OVERRIDE_CONFIG" localhost:3000 --log=stdout > /tmp/transporti-ngrok.log 2>&1 &
+    fi
 else
-    npx ngrok http 3000 --log=stdout > /tmp/transporti-ngrok.log 2>&1 &
+    echo "❌ ngrok is not installed. Install it and run: ngrok config add-authtoken YOUR_TOKEN"
+    exit 1
 fi
 NGROK_PID=$!
 
@@ -42,7 +58,7 @@ echo "⏳ Waiting for ngrok URL..."
 attempt=0
 NGROK_URL=""
 while [ $attempt -lt 20 ]; do
-    NGROK_URL=$(curl -s http://127.0.0.1:4040/api/tunnels | grep -o '"public_url":"https://[^"]*' | grep -o 'https://[^"]*' | head -1 || true)
+    NGROK_URL=$(curl -s "http://${NGROK_API_HOST}:${NGROK_API_PORT}/api/tunnels" | grep -o '"public_url":"https://[^"]*' | grep -o 'https://[^"]*' | head -1 || true)
     if [ -n "$NGROK_URL" ]; then
         break
     fi
@@ -72,7 +88,7 @@ echo "✅ Backend public URL: $NGROK_URL"
 echo "✅ Mobile API URL set to: $PUBLIC_API_URL"
 echo ""
 echo "Now run in another terminal:"
-echo "  cd transporti-mobile && npm run start:tunnel"
+echo "  npm run start:mobile:tunnel"
 echo ""
 
 if [ -n "$BACKEND_PID" ]; then
