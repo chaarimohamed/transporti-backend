@@ -1,9 +1,21 @@
-import { Expo, ExpoPushMessage, ExpoPushTicket } from 'expo-server-sdk';
+const EXPO_PUSH_URL = 'https://exp.host/--/api/v2/push/send';
+const EXPO_TOKEN_REGEX = /^ExponentPushToken\[.+\]$|^ExpoPushToken\[.+\]$/;
+const CHUNK_SIZE = 100;
 
-const expo = new Expo();
+/** Returns true if the string looks like a valid Expo push token */
+const isExpoPushToken = (t: string): boolean => EXPO_TOKEN_REGEX.test(t);
+
+interface ExpoPushMessage {
+  to: string;
+  sound: 'default';
+  title: string;
+  body: string;
+  data: Record<string, unknown>;
+}
 
 /**
  * Send a push notification to one or more Expo push tokens.
+ * Calls Expo's HTTP push API directly — no SDK, no ESM issues.
  * Silently logs errors — never throws, so callers don't need try/catch.
  */
 export const sendPushNotification = async (
@@ -12,9 +24,8 @@ export const sendPushNotification = async (
   body: string,
   data?: Record<string, unknown>
 ): Promise<void> => {
-  // Filter valid Expo push tokens
   const validTokens = tokens.filter(
-    (t): t is string => typeof t === 'string' && Expo.isExpoPushToken(t)
+    (t): t is string => typeof t === 'string' && isExpoPushToken(t)
   );
 
   if (validTokens.length === 0) return;
@@ -27,19 +38,29 @@ export const sendPushNotification = async (
     data: data ?? {},
   }));
 
-  try {
-    const chunks = expo.chunkPushNotifications(messages);
+  // Chunk into batches of 100 (Expo's limit)
+  for (let i = 0; i < messages.length; i += CHUNK_SIZE) {
+    const chunk = messages.slice(i, i + CHUNK_SIZE);
+    try {
+      const res = await fetch(EXPO_PUSH_URL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
+        body: JSON.stringify(chunk),
+      });
 
-    for (const chunk of chunks) {
-      const tickets: ExpoPushTicket[] = await expo.sendPushNotificationsAsync(chunk);
+      if (!res.ok) {
+        console.error('📵 Expo push API error:', res.status, await res.text());
+        continue;
+      }
 
+      const { data: tickets } = await res.json() as { data: { status: string; message?: string }[] };
       for (const ticket of tickets) {
         if (ticket.status === 'error') {
-          console.error('📵 Push notification error:', ticket.message, ticket.details);
+          console.error('📵 Push notification error:', ticket.message);
         }
       }
+    } catch (err) {
+      console.error('📵 Failed to send push notifications:', err);
     }
-  } catch (err) {
-    console.error('📵 Failed to send push notifications:', err);
   }
 };

@@ -1,6 +1,8 @@
 import { Response } from 'express';
 import { PrismaClient } from '@prisma/client';
-import { Expo } from 'expo-server-sdk';
+
+const EXPO_TOKEN_REGEX = /^ExponentPushToken\[.+\]$|^ExpoPushToken\[.+\]$/;
+const isExpoPushToken = (t: string): boolean => EXPO_TOKEN_REGEX.test(t);
 
 const prisma = new PrismaClient();
 
@@ -222,7 +224,7 @@ export const registerPushToken = async (req: any, res: Response) => {
       });
     }
 
-    if (!Expo.isExpoPushToken(token)) {
+    if (!isExpoPushToken(token)) {
       return res.status(400).json({
         success: false,
         error: 'Le token fourni n\'est pas un token Expo valide',
