@@ -1,9 +1,8 @@
 import { Request, Response } from 'express';
-import bcrypt from 'bcrypt';
+import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
 import crypto from 'crypto';
 import prisma from '../config/database';
-import { env } from '../config/env';
 
 // Register new user
 export const register = async (req: Request, res: Response) => {
@@ -102,8 +101,8 @@ export const register = async (req: Request, res: Response) => {
       // Generate JWT token
       token = jwt.sign(
         { id: user.id, email: user.email, role: 'sender' },
-        env.jwtSecret,
-        { expiresIn: env.jwtExpiresIn }
+        process.env.JWT_SECRET!,
+        { expiresIn: (process.env.JWT_EXPIRES_IN || '7d') as any }
       );
     } else {
       // Create carrier
@@ -140,8 +139,8 @@ export const register = async (req: Request, res: Response) => {
       // Generate JWT token
       token = jwt.sign(
         { id: user.id, email: user.email, role: 'carrier' },
-        env.jwtSecret,
-        { expiresIn: env.jwtExpiresIn }
+        process.env.JWT_SECRET!,
+        { expiresIn: (process.env.JWT_EXPIRES_IN || '7d') as any }
       );
     }
 
@@ -203,8 +202,8 @@ export const login = async (req: Request, res: Response) => {
     // Generate JWT token
     const token = jwt.sign(
       { id: user.id, email: user.email, role: userRole },
-      env.jwtSecret,
-      { expiresIn: env.jwtExpiresIn }
+      process.env.JWT_SECRET!,
+      { expiresIn: (process.env.JWT_EXPIRES_IN || '7d') as any }
     );
 
     // Remove password from response
