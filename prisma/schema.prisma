@@ -115,6 +115,7 @@ model Carrier {
   requestedShipments Shipment[]     @relation("RequestedShipments")
   notifications      Notification[]
   feedbackEntries    ShipmentFeedback[]
+  applications       ShipmentApplication[]
   
   @@map("carriers")
 }
@@ -126,7 +127,7 @@ model Shipment {
   from        String
   to          String
   cargo       String?
-  price       Float
+  price       Float?
   status      ShipmentStatus @default(PENDING)
   description String?
   
@@ -166,6 +167,9 @@ model Shipment {
   
   // Feedback relation (optional - one record per shipment, one entry per party)
   feedback ShipmentFeedback?
+
+  // Carrier applications (TC-106: carrier-proposed pricing)
+  applications ShipmentApplication[]
   
   // Timestamps
   createdAt   DateTime       @default(now())
@@ -234,4 +238,27 @@ model ShipmentFeedback {
   @@map("shipment_feedback")
   @@index([senderId])
   @@index([carrierId])
+}
+
+// Enum for carrier application status (TC-106)
+enum ApplicationStatus {
+  PENDING
+  ACCEPTED
+  REJECTED
+}
+
+// Carrier application for a shipment, with proposed price (TC-106)
+model ShipmentApplication {
+  id            String            @id @default(uuid())
+  shipmentId    String
+  shipment      Shipment          @relation(fields: [shipmentId], references: [id], onDelete: Cascade)
+  carrierId     String
+  carrier       Carrier           @relation(fields: [carrierId], references: [id], onDelete: Cascade)
+  proposedPrice Float
+  status        ApplicationStatus @default(PENDING)
+  createdAt     DateTime          @default(now())
+  updatedAt     DateTime          @updatedAt
+
+  @@unique([shipmentId, carrierId])
+  @@map("shipment_applications")
 }
