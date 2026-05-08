@@ -126,6 +126,11 @@ model Shipment {
   refNumber   String         @unique // EXP-2938
   from        String
   to          String
+  itemName    String?
+  pickupDate  String?
+  packageFormat String?
+  pickupCity  String?
+  deliveryCity String?
   cargo       String?
   price       Float?
   status      ShipmentStatus @default(PENDING)

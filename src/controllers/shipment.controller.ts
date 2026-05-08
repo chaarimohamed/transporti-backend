@@ -82,12 +82,16 @@ export const createShipment = async (req: any, res: Response) => {
     const {
       from,
       to,
+      itemName,
       cargo,
       price,
       description,
       pickupDate,
       weight,
       format,
+      packageFormat,
+      pickupCity,
+      deliveryCity,
       dimensions,
       declaredValue,
       insurance,
@@ -123,6 +127,11 @@ export const createShipment = async (req: any, res: Response) => {
         refNumber: generateRefNumber(),
         from,
         to,
+        ...(itemName && { itemName }),
+        ...(pickupDate && { pickupDate }),
+        ...((packageFormat || format) && { packageFormat: packageFormat || format }),
+        ...(pickupCity && { pickupCity }),
+        ...(deliveryCity && { deliveryCity }),
         cargo: cargo || '',
         // Price is now set when a carrier application is accepted (TC-106)
         description: description || '',
@@ -204,13 +213,18 @@ export const getMyShipments = async (req: any, res: Response) => {
 
     const shipments = await prisma.shipment.findMany({
       where,
-      // packagePhotos is fetched but stripped before the response — only photosCount is returned
-      // (TC-107: list cards show a photo count indicator without sending heavy base64 data)
+      // packagePhotos is fetched but stripped before the response.
+      // Only lightweight preview data is returned for list cards.
       select: {
         id: true,
         refNumber: true,
         from: true,
         to: true,
+        itemName: true,
+        pickupDate: true,
+        packageFormat: true,
+        pickupCity: true,
+        deliveryCity: true,
         cargo: true,
         price: true,
         status: true,
@@ -273,6 +287,7 @@ export const getMyShipments = async (req: any, res: Response) => {
 
     const shipmentsWithCount = shipments.map(({ packagePhotos, ...s }) => ({
       ...s,
+      photoPreviews: packagePhotos.slice(0, 3),
       photosCount: packagePhotos.length,
     }));
 
@@ -320,13 +335,18 @@ export const getAvailableShipments = async (req: any, res: Response) => {
 
     const shipments = await prisma.shipment.findMany({
       where,
-      // packagePhotos is fetched but stripped before the response — only photosCount is returned
-      // (TC-107: list cards show a photo count indicator without sending heavy base64 data)
+      // packagePhotos is fetched but stripped before the response.
+      // Only lightweight preview data is returned for list cards.
       select: {
         id: true,
         refNumber: true,
         from: true,
         to: true,
+        itemName: true,
+        pickupDate: true,
+        packageFormat: true,
+        pickupCity: true,
+        deliveryCity: true,
         cargo: true,
         price: true,
         status: true,
@@ -365,6 +385,7 @@ export const getAvailableShipments = async (req: any, res: Response) => {
 
     const shipmentsWithCount = shipments.map(({ packagePhotos, ...s }) => ({
       ...s,
+      photoPreviews: packagePhotos.slice(0, 3),
       photosCount: packagePhotos.length,
     }));
 
@@ -397,6 +418,11 @@ export const getShipmentById = async (req: any, res: Response) => {
         refNumber: true,
         from: true,
         to: true,
+        itemName: true,
+        pickupDate: true,
+        packageFormat: true,
+        pickupCity: true,
+        deliveryCity: true,
         cargo: true,
         price: true,
         status: true,
