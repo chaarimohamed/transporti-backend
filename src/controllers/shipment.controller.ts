@@ -409,6 +409,7 @@ export const getAvailableShipments = async (req: any, res: Response) => {
 export const getShipmentById = async (req: any, res: Response) => {
   try {
     const { id } = req.params;
+    const isCarrierUser = req.user.role?.toUpperCase() === 'CARRIER';
 
     const shipment = await prisma.shipment.findUnique({
       where: { id },
@@ -539,10 +540,31 @@ export const getShipmentById = async (req: any, res: Response) => {
       });
     }
 
+    const myApplication = isCarrierUser
+      ? await prisma.shipmentApplication.findUnique({
+          where: {
+            shipmentId_carrierId: {
+              shipmentId: shipment.id,
+              carrierId: req.user.id,
+            },
+          },
+          select: {
+            id: true,
+            proposedPrice: true,
+            status: true,
+            carrierId: true,
+            shipmentId: true,
+            createdAt: true,
+            updatedAt: true,
+          },
+        })
+      : null;
+
     res.status(200).json({
       success: true,
       data: {
         ...shipment,
+        myApplication,
         feedbackSummary: getFeedbackSummary(shipment, req.user),
       },
     });
