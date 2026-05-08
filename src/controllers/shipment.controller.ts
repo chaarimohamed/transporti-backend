@@ -204,8 +204,8 @@ export const getMyShipments = async (req: any, res: Response) => {
 
     const shipments = await prisma.shipment.findMany({
       where,
-      // packagePhotos deliberately excluded from list — only loaded on the detail screen
-      // (each photo is a large base64 string; including them here makes list calls very slow)
+      // packagePhotos is fetched but stripped before the response — only photosCount is returned
+      // (TC-107: list cards show a photo count indicator without sending heavy base64 data)
       select: {
         id: true,
         refNumber: true,
@@ -231,6 +231,7 @@ export const getMyShipments = async (req: any, res: Response) => {
         deliveryCode: true,
         createdAt: true,
         updatedAt: true,
+        packagePhotos: true,
         carrier: {
           select: {
             id: true,
@@ -270,9 +271,14 @@ export const getMyShipments = async (req: any, res: Response) => {
       },
     });
 
+    const shipmentsWithCount = shipments.map(({ packagePhotos, ...s }) => ({
+      ...s,
+      photosCount: packagePhotos.length,
+    }));
+
     res.status(200).json({
       success: true,
-      data: shipments,
+      data: shipmentsWithCount,
     });
   } catch (error) {
     console.error('Get shipments error:', error);
@@ -314,8 +320,8 @@ export const getAvailableShipments = async (req: any, res: Response) => {
 
     const shipments = await prisma.shipment.findMany({
       where,
-      // packagePhotos deliberately excluded from list — only loaded on the detail screen
-      // (each photo is a large base64 string; including them here makes list calls very slow)
+      // packagePhotos is fetched but stripped before the response — only photosCount is returned
+      // (TC-107: list cards show a photo count indicator without sending heavy base64 data)
       select: {
         id: true,
         refNumber: true,
@@ -341,6 +347,7 @@ export const getAvailableShipments = async (req: any, res: Response) => {
         deliveryCode: true,
         createdAt: true,
         updatedAt: true,
+        packagePhotos: true,
         sender: {
           select: {
             id: true,
@@ -356,9 +363,14 @@ export const getAvailableShipments = async (req: any, res: Response) => {
       },
     });
 
+    const shipmentsWithCount = shipments.map(({ packagePhotos, ...s }) => ({
+      ...s,
+      photosCount: packagePhotos.length,
+    }));
+
     res.status(200).json({
       success: true,
-      data: shipments,
+      data: shipmentsWithCount,
     });
   } catch (error) {
     console.error('Get available shipments error:', error);
