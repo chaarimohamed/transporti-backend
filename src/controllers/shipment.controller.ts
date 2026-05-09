@@ -414,7 +414,7 @@ export const getShipmentById = async (req: any, res: Response) => {
     const shipment = await prisma.shipment.findUnique({
       where: { id },
       select: {
-        // All scalar fields except packagePhotos (heavy base64 arrays)
+        // Single-shipment details include packagePhotos so detail screens can render the full gallery.
         id: true,
         refNumber: true,
         from: true,
@@ -437,6 +437,7 @@ export const getShipmentById = async (req: any, res: Response) => {
         recipientName: true,
         recipientPhone: true,
         deliveryInstructions: true,
+        packagePhotos: true,
         helperCount: true,
         deliveryHelperCount: true,
         pickupMeetingPoint: true,
