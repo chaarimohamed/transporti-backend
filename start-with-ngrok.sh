@@ -10,14 +10,21 @@ NGROK_API_HOST="localhost"
 NGROK_API_PORT="4041"
 NGROK_BASE_CONFIG="${XDG_CONFIG_HOME:-$HOME/.config}/ngrok/ngrok.yml"
 NGROK_OVERRIDE_CONFIG="$(mktemp)"
+BACKEND_PID=""
+NGROK_PID=""
 
 cleanup() {
+    if [ -n "$BACKEND_PID" ]; then
+        kill "$BACKEND_PID" 2>/dev/null || true
+    fi
     if [ -n "$NGROK_PID" ]; then
         kill "$NGROK_PID" 2>/dev/null || true
     fi
     rm -f "$NGROK_OVERRIDE_CONFIG"
 }
-trap cleanup EXIT INT TERM
+trap cleanup EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
 
 echo "🔧 Starting backend API on port 3000..."
 EXISTING_BACKEND_PID=$(ss -ltnp 2>/dev/null | sed -n 's/.*:3000 .*pid=\([0-9]\+\).*/\1/p' | head -1)
@@ -92,8 +99,8 @@ echo "  npm run start:mobile:tunnel"
 echo ""
 
 if [ -n "$BACKEND_PID" ]; then
-    wait "$BACKEND_PID"
+    wait "$BACKEND_PID" || true
 else
     # Keep script alive while ngrok runs when backend is reused.
-    wait "$NGROK_PID"
+    wait "$NGROK_PID" || true
 fi

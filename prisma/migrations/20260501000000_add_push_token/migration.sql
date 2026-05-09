@@ -1,5 +1,2 @@
--- AlterTable
-ALTER TABLE "senders" ADD COLUMN "pushToken" TEXT;
-
--- AlterTable
-ALTER TABLE "carriers" ADD COLUMN "pushToken" TEXT;
+-- Duplicate push-token migration kept as a no-op.
+-- The same columns were already added in 20260427070326_add_push_token.

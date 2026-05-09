@@ -1,0 +1,6 @@
+-- Duplicate baseline migration kept as a no-op.
+--
+-- The real schema history starts at 20260101234620_transporti and is evolved by
+-- the following incremental migrations. This later-generated "init" snapshot
+-- duplicated enum/table creation and broke `prisma migrate dev` on fresh/shadow
+-- databases with errors like `type "ShipmentStatus" already exists`.

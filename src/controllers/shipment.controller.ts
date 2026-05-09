@@ -82,12 +82,16 @@ export const createShipment = async (req: any, res: Response) => {
     const {
       from,
       to,
+      itemName,
       cargo,
       price,
       description,
       pickupDate,
       weight,
       format,
+      packageFormat,
+      pickupCity,
+      deliveryCity,
       dimensions,
       declaredValue,
       insurance,
@@ -110,10 +114,10 @@ export const createShipment = async (req: any, res: Response) => {
     } = req.body;
 
     // Validate required fields
-    if (!from || !to || !price) {
+    if (!from || !to) {
       return res.status(400).json({
         success: false,
-        error: 'Les champs "from", "to" et "price" sont obligatoires',
+        error: 'Les champs "from" et "to" sont obligatoires',
       });
     }
 
@@ -123,8 +127,13 @@ export const createShipment = async (req: any, res: Response) => {
         refNumber: generateRefNumber(),
         from,
         to,
+        ...(itemName && { itemName }),
+        ...(pickupDate && { pickupDate }),
+        ...((packageFormat || format) && { packageFormat: packageFormat || format }),
+        ...(pickupCity && { pickupCity }),
+        ...(deliveryCity && { deliveryCity }),
         cargo: cargo || '',
-        price: parseFloat(price),
+        // Price is now set when a carrier application is accepted (TC-106)
         description: description || '',
         senderId: req.user.id,
         status: ShipmentStatus.PENDING,
@@ -183,11 +192,11 @@ export const getMyShipments = async (req: any, res: Response) => {
     let where: any;
     
     if (userRole === 'CARRIER') {
-      // For carriers: return shipments where they are assigned (carrierId) OR requested (requestedCarrierId)
+      // For carriers: return shipments where they are assigned OR have a pending application (TC-106)
       where = {
         OR: [
           { carrierId: req.user.id }, // Shipments assigned to this carrier (CONFIRMED, IN_TRANSIT, DELIVERED)
-          { requestedCarrierId: req.user.id }, // Shipments requested by this carrier (REQUESTED)
+          { applications: { some: { carrierId: req.user.id, status: 'PENDING' } } }, // Active applications
         ],
       };
     } else {
@@ -204,13 +213,18 @@ export const getMyShipments = async (req: any, res: Response) => {
 
     const shipments = await prisma.shipment.findMany({
       where,
-      // packagePhotos deliberately excluded from list — only loaded on the detail screen
-      // (each photo is a large base64 string; including them here makes list calls very slow)
+      // packagePhotos is fetched but stripped before the response.
+      // Only lightweight preview data is returned for list cards.
       select: {
         id: true,
         refNumber: true,
         from: true,
         to: true,
+        itemName: true,
+        pickupDate: true,
+        packageFormat: true,
+        pickupCity: true,
+        deliveryCity: true,
         cargo: true,
         price: true,
         status: true,
@@ -231,6 +245,7 @@ export const getMyShipments = async (req: any, res: Response) => {
         deliveryCode: true,
         createdAt: true,
         updatedAt: true,
+        packagePhotos: true,
         carrier: {
           select: {
             id: true,
@@ -270,9 +285,15 @@ export const getMyShipments = async (req: any, res: Response) => {
       },
     });
 
+    const shipmentsWithCount = shipments.map(({ packagePhotos, ...s }) => ({
+      ...s,
+      photoPreviews: packagePhotos.slice(0, 3),
+      photosCount: packagePhotos.length,
+    }));
+
     res.status(200).json({
       success: true,
-      data: shipments,
+      data: shipmentsWithCount,
     });
   } catch (error) {
     console.error('Get shipments error:', error);
@@ -291,14 +312,17 @@ export const getAvailableShipments = async (req: any, res: Response) => {
   try {
     const { status, gouvernerat } = req.query;
 
-    // Build where clause - only truly available shipments
-    // - PENDING status (not yet requested by any carrier)
-    // - No carrier assigned
-    // - No carrier has requested it yet
+    // Build where clause — show PENDING and REQUESTED shipments
+    // (TC-106: multiple carriers can apply simultaneously)
     const where: any = {
-      status: ShipmentStatus.PENDING, // Only pending shipments
+      status: { in: [ShipmentStatus.PENDING, ShipmentStatus.REQUESTED] },
       carrierId: null, // Not yet assigned to a carrier
-      requestedCarrierId: null, // No carrier has requested yet
+      // Exclude shipments where the current carrier already applied
+      NOT: {
+        applications: {
+          some: { carrierId: req.user.id },
+        },
+      },
     };
 
     // Optional: filter by pickup city (gouvernerat)
@@ -311,13 +335,18 @@ export const getAvailableShipments = async (req: any, res: Response) => {
 
     const shipments = await prisma.shipment.findMany({
       where,
-      // packagePhotos deliberately excluded from list — only loaded on the detail screen
-      // (each photo is a large base64 string; including them here makes list calls very slow)
+      // packagePhotos is fetched but stripped before the response.
+      // Only lightweight preview data is returned for list cards.
       select: {
         id: true,
         refNumber: true,
         from: true,
         to: true,
+        itemName: true,
+        pickupDate: true,
+        packageFormat: true,
+        pickupCity: true,
+        deliveryCity: true,
         cargo: true,
         price: true,
         status: true,
@@ -338,6 +367,7 @@ export const getAvailableShipments = async (req: any, res: Response) => {
         deliveryCode: true,
         createdAt: true,
         updatedAt: true,
+        packagePhotos: true,
         sender: {
           select: {
             id: true,
@@ -353,9 +383,15 @@ export const getAvailableShipments = async (req: any, res: Response) => {
       },
     });
 
+    const shipmentsWithCount = shipments.map(({ packagePhotos, ...s }) => ({
+      ...s,
+      photoPreviews: packagePhotos.slice(0, 3),
+      photosCount: packagePhotos.length,
+    }));
+
     res.status(200).json({
       success: true,
-      data: shipments,
+      data: shipmentsWithCount,
     });
   } catch (error) {
     console.error('Get available shipments error:', error);
@@ -373,15 +409,21 @@ export const getAvailableShipments = async (req: any, res: Response) => {
 export const getShipmentById = async (req: any, res: Response) => {
   try {
     const { id } = req.params;
+    const isCarrierUser = req.user.role?.toUpperCase() === 'CARRIER';
 
     const shipment = await prisma.shipment.findUnique({
       where: { id },
       select: {
-        // All scalar fields except packagePhotos (heavy base64 arrays)
+        // Single-shipment details include packagePhotos so detail screens can render the full gallery.
         id: true,
         refNumber: true,
         from: true,
         to: true,
+        itemName: true,
+        pickupDate: true,
+        packageFormat: true,
+        pickupCity: true,
+        deliveryCity: true,
         cargo: true,
         price: true,
         status: true,
@@ -395,6 +437,7 @@ export const getShipmentById = async (req: any, res: Response) => {
         recipientName: true,
         recipientPhone: true,
         deliveryInstructions: true,
+        packagePhotos: true,
         helperCount: true,
         deliveryHelperCount: true,
         pickupMeetingPoint: true,
@@ -498,10 +541,31 @@ export const getShipmentById = async (req: any, res: Response) => {
       });
     }
 
+    const myApplication = isCarrierUser
+      ? await prisma.shipmentApplication.findUnique({
+          where: {
+            shipmentId_carrierId: {
+              shipmentId: shipment.id,
+              carrierId: req.user.id,
+            },
+          },
+          select: {
+            id: true,
+            proposedPrice: true,
+            status: true,
+            carrierId: true,
+            shipmentId: true,
+            createdAt: true,
+            updatedAt: true,
+          },
+        })
+      : null;
+
     res.status(200).json({
       success: true,
       data: {
         ...shipment,
+        myApplication,
         feedbackSummary: getFeedbackSummary(shipment, req.user),
       },
     });
@@ -651,18 +715,29 @@ export const submitShipmentFeedback = async (req: any, res: Response) => {
 };
 
 /**
- * Request a shipment (carrier expresses interest)
+ * Request a shipment (carrier applies with a proposed price)
  * POST /api/shipments/:id/request
+ * TC-106: Multiple carriers can apply simultaneously with different proposed prices
  */
 export const requestShipment = async (req: any, res: Response) => {
   try {
     const { id } = req.params;
+    const { proposedPrice } = req.body;
 
     // Check if user is a carrier
     if (req.user.role?.toUpperCase() !== 'CARRIER') {
       return res.status(403).json({
         success: false,
         error: 'Seuls les transporteurs peuvent demander des expéditions',
+      });
+    }
+
+    // Validate proposedPrice
+    const price = parseFloat(proposedPrice);
+    if (!proposedPrice || isNaN(price) || price <= 0) {
+      return res.status(400).json({
+        success: false,
+        error: 'Un prix proposé valide est obligatoire',
       });
     }
 
@@ -688,67 +763,58 @@ export const requestShipment = async (req: any, res: Response) => {
       });
     }
 
-    // Check if shipment is still available
-    if (shipment.status !== ShipmentStatus.PENDING) {
+    // Only PENDING and REQUESTED shipments accept new applications
+    if (shipment.status !== ShipmentStatus.PENDING && shipment.status !== ShipmentStatus.REQUESTED) {
       return res.status(400).json({
         success: false,
         error: 'Cette expédition n\'est plus disponible',
       });
     }
 
-    // Check if this carrier has already requested this shipment
-    if (shipment.requestedCarrierId === req.user.id) {
+    // Check if this carrier has already applied
+    const existingApplication = await prisma.shipmentApplication.findUnique({
+      where: { shipmentId_carrierId: { shipmentId: id, carrierId: req.user.id } },
+    });
+    if (existingApplication) {
       return res.status(400).json({
         success: false,
         error: 'Vous avez déjà postulé pour cette expédition',
       });
     }
 
-    // Check if another carrier has already requested this shipment
-    if (shipment.requestedCarrierId) {
-      return res.status(400).json({
-        success: false,
-        error: 'Un autre transporteur a déjà postulé pour cette expédition',
-      });
-    }
-
-    // Update shipment with requested carrier
-    const updatedShipment = await prisma.shipment.update({
-      where: { id },
+    // Create the application record
+    const application = await prisma.shipmentApplication.create({
       data: {
-        status: ShipmentStatus.REQUESTED,
-        requestedCarrierId: req.user.id,
-      },
-      include: {
-        sender: {
-          select: {
-            id: true,
-            firstName: true,
-            lastName: true,
-            email: true,
-          },
-        },
-        carrier: {
-          select: {
-            id: true,
-            firstName: true,
-            lastName: true,
-          },
-        },
+        shipmentId: id,
+        carrierId: req.user.id,
+        proposedPrice: price,
+        status: 'PENDING',
       },
     });
+
+    // If first application: transition shipment to REQUESTED and set requestedCarrierId
+    if (shipment.status === ShipmentStatus.PENDING) {
+      await prisma.shipment.update({
+        where: { id },
+        data: {
+          status: ShipmentStatus.REQUESTED,
+          requestedCarrierId: req.user.id,
+        },
+      });
+    }
 
     // Create notification for sender
     await prisma.notification.create({
       data: {
         type: 'CARRIER_REQUEST',
         title: 'Nouvelle candidature',
-        message: `Un transporteur souhaite prendre votre expédition ${shipment.refNumber}`,
+        message: `Un transporteur a proposé ${price} DT pour votre expédition ${shipment.refNumber}`,
         senderId: shipment.senderId,
         shipmentId: shipment.id,
         data: {
           shipmentRefNumber: shipment.refNumber,
           carrierId: req.user.id,
+          proposedPrice: price,
         },
       },
     });
@@ -758,23 +824,83 @@ export const requestShipment = async (req: any, res: Response) => {
     await sendPushNotification(
       [senderRecord?.pushToken],
       'Nouvelle candidature',
-      `Un transporteur souhaite prendre votre expédition ${shipment.refNumber}`,
+      `Un transporteur a proposé ${price} DT pour votre expédition ${shipment.refNumber}`,
       { shipmentId: shipment.id }
     );
 
-    // TODO: Send push notification to sender
-    console.log(`Notification: Carrier ${req.user.id} requested shipment ${shipment.refNumber} from sender ${shipment.sender.email}`);
-
     res.status(200).json({
       success: true,
-      message: 'Demande envoyée à l\'expéditeur avec succès',
-      data: updatedShipment,
+      message: 'Candidature envoyée à l\'expéditeur avec succès',
+      data: application,
     });
   } catch (error) {
     console.error('Request shipment error:', error);
     res.status(500).json({
       success: false,
-      error: 'Erreur lors de la demande d\'expédition',
+      error: 'Erreur lors de la candidature',
+    });
+  }
+};
+
+/**
+ * Get all applications for a shipment (sender view)
+ * GET /api/shipments/:id/applications
+ * TC-106: Returns all carrier applications with proposed prices
+ */
+export const getShipmentApplications = async (req: any, res: Response) => {
+  try {
+    const { id } = req.params;
+
+    // Find shipment
+    const shipment = await prisma.shipment.findUnique({
+      where: { id },
+      select: { id: true, senderId: true, refNumber: true },
+    });
+
+    if (!shipment) {
+      return res.status(404).json({
+        success: false,
+        error: 'Expédition introuvable',
+      });
+    }
+
+    // Only sender can view applications
+    if (shipment.senderId !== req.user.id) {
+      return res.status(403).json({
+        success: false,
+        error: 'Accès non autorisé',
+      });
+    }
+
+    const applications = await prisma.shipmentApplication.findMany({
+      where: { shipmentId: id },
+      include: {
+        carrier: {
+          select: {
+            id: true,
+            firstName: true,
+            lastName: true,
+            phone: true,
+            gouvernerat: true,
+            averageRating: true,
+            totalReviews: true,
+            vehicleType: true,
+            vehicleSize: true,
+          },
+        },
+      },
+      orderBy: { createdAt: 'asc' },
+    });
+
+    res.status(200).json({
+      success: true,
+      data: applications,
+    });
+  } catch (error) {
+    console.error('Get shipment applications error:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Erreur lors de la récupération des candidatures',
     });
   }
 };
@@ -898,18 +1024,29 @@ export const inviteCarrier = async (req: any, res: Response) => {
 };
 
 /**
- * Accept invitation (carrier accepts sender's invitation)
+ * Accept invitation (carrier accepts sender's invitation with a proposed price)
  * POST /api/shipments/:id/accept-invitation
+ * TC-106: Carrier provides a proposedPrice when accepting an invitation
  */
 export const acceptInvitation = async (req: any, res: Response) => {
   try {
     const { id } = req.params;
+    const { proposedPrice } = req.body;
 
     // Check if user is a carrier
     if (req.user.role?.toUpperCase() !== 'CARRIER') {
       return res.status(403).json({
         success: false,
         error: 'Seuls les transporteurs peuvent accepter des invitations',
+      });
+    }
+
+    // Validate proposedPrice
+    const price = parseFloat(proposedPrice);
+    if (!proposedPrice || isNaN(price) || price <= 0) {
+      return res.status(400).json({
+        success: false,
+        error: 'Un prix proposé valide est obligatoire',
       });
     }
 
@@ -935,20 +1072,75 @@ export const acceptInvitation = async (req: any, res: Response) => {
       });
     }
 
-    // Check if shipment is still available
-    if (shipment.status !== ShipmentStatus.PENDING) {
+    const invitation = await prisma.notification.findFirst({
+      where: {
+        shipmentId: id,
+        carrierId: req.user.id,
+        type: 'SHIPMENT_INVITATION',
+      },
+      select: { id: true },
+    });
+
+    if (!invitation) {
+      return res.status(403).json({
+        success: false,
+        error: 'Invitation introuvable ou expirée',
+      });
+    }
+
+    // Check if shipment is still available for the invited carrier
+    if (shipment.status !== ShipmentStatus.PENDING && shipment.status !== ShipmentStatus.REQUESTED) {
       return res.status(400).json({
         success: false,
         error: 'Cette expédition n\'est plus disponible',
       });
     }
 
-    // Directly confirm the shipment (skip REQUESTED status since sender invited this carrier)
+    const pendingApplications = await prisma.shipmentApplication.findMany({
+      where: {
+        shipmentId: id,
+        status: 'PENDING',
+      },
+      select: {
+        id: true,
+        carrierId: true,
+      },
+    });
+
+    const invitedCarrierApplication = pendingApplications.find(
+      (application) => application.carrierId === req.user.id
+    );
+    const rejectedApplications = pendingApplications.filter(
+      (application) => application.carrierId !== req.user.id
+    );
+
+    if (invitedCarrierApplication) {
+      await prisma.shipmentApplication.update({
+        where: { id: invitedCarrierApplication.id },
+        data: {
+          status: 'ACCEPTED',
+          proposedPrice: price,
+        },
+      });
+    }
+
+    if (rejectedApplications.length > 0) {
+      await prisma.shipmentApplication.updateMany({
+        where: {
+          id: { in: rejectedApplications.map((application) => application.id) },
+        },
+        data: { status: 'REJECTED' },
+      });
+    }
+
+    // Directly confirm the shipment with the proposed price (sender invited this carrier)
     const updatedShipment = await prisma.shipment.update({
       where: { id },
       data: {
         status: ShipmentStatus.CONFIRMED,
         carrierId: req.user.id,
+        requestedCarrierId: null,
+        price: price,
       },
       include: {
         sender: {
@@ -993,11 +1185,34 @@ export const acceptInvitation = async (req: any, res: Response) => {
       { shipmentId: shipment.id }
     );
 
-    // Delete the invitation notification for the carrier
+    for (const rejectedApplication of rejectedApplications) {
+      await prisma.notification.create({
+        data: {
+          type: 'REQUEST_REJECTED',
+          title: 'Candidature refusée',
+          message: `Votre candidature pour l'expédition ${shipment.refNumber} n'a pas été retenue`,
+          carrierId: rejectedApplication.carrierId,
+          shipmentId: shipment.id,
+          data: { shipmentRefNumber: shipment.refNumber },
+        },
+      });
+
+      const rejectedCarrier = await prisma.carrier.findUnique({
+        where: { id: rejectedApplication.carrierId },
+        select: { pushToken: true },
+      });
+      await sendPushNotification(
+        [rejectedCarrier?.pushToken],
+        'Candidature refusée',
+        `Votre candidature pour l'expédition ${shipment.refNumber} n'a pas été retenue`,
+        { shipmentId: shipment.id }
+      );
+    }
+
+    // Delete all invitation notifications for this shipment to avoid stale invites
     await prisma.notification.deleteMany({
       where: {
         shipmentId: id,
-        carrierId: req.user.id,
         type: 'SHIPMENT_INVITATION',
       },
     });
@@ -1019,19 +1234,26 @@ export const acceptInvitation = async (req: any, res: Response) => {
 };
 
 /**
- * Accept carrier request (sender accepts a carrier's application)
+ * Accept carrier request (sender accepts a specific carrier application)
  * POST /api/shipments/:id/accept-carrier
+ * TC-106: applicationId in body identifies which carrier's proposal to accept
  */
 export const acceptCarrier = async (req: any, res: Response) => {
   try {
     const { id } = req.params;
+    const { applicationId } = req.body;
+
+    if (!applicationId) {
+      return res.status(400).json({
+        success: false,
+        error: 'L\'ID de la candidature est obligatoire',
+      });
+    }
 
     // Find shipment
     const shipment = await prisma.shipment.findUnique({
       where: { id },
-      include: {
-        sender: true,
-      },
+      include: { sender: true },
     });
 
     if (!shipment) {
@@ -1053,23 +1275,55 @@ export const acceptCarrier = async (req: any, res: Response) => {
     if (shipment.status !== ShipmentStatus.REQUESTED) {
       return res.status(400).json({
         success: false,
-        error: 'Aucune demande de transporteur pour cette expédition',
+        error: 'Aucune candidature de transporteur pour cette expédition',
       });
     }
 
-    if (!shipment.requestedCarrierId) {
+    // Find the specific application
+    const application = await prisma.shipmentApplication.findUnique({
+      where: { id: applicationId },
+    });
+
+    if (!application || application.shipmentId !== id) {
+      return res.status(404).json({
+        success: false,
+        error: 'Candidature introuvable',
+      });
+    }
+
+    if (application.status !== 'PENDING') {
       return res.status(400).json({
         success: false,
-        error: 'Aucun transporteur n\'a demandé cette expédition',
+        error: 'Cette candidature n\'est plus en attente',
       });
     }
 
-    // Accept the carrier - assign them and set status to CONFIRMED
+    // Mark accepted application
+    await prisma.shipmentApplication.update({
+      where: { id: applicationId },
+      data: { status: 'ACCEPTED' },
+    });
+
+    // Reject all other PENDING applications for this shipment
+    const rejectedApplications = await prisma.shipmentApplication.findMany({
+      where: { shipmentId: id, status: 'PENDING', id: { not: applicationId } },
+      select: { id: true, carrierId: true },
+    });
+    if (rejectedApplications.length > 0) {
+      await prisma.shipmentApplication.updateMany({
+        where: { shipmentId: id, status: 'PENDING', id: { not: applicationId } },
+        data: { status: 'REJECTED' },
+      });
+    }
+
+    // Accept the carrier — set price from accepted application
     const updatedShipment = await prisma.shipment.update({
       where: { id },
       data: {
-        carrierId: shipment.requestedCarrierId,
+        carrierId: application.carrierId,
+        price: application.proposedPrice,
         status: ShipmentStatus.CONFIRMED,
+        requestedCarrierId: null,
       },
       include: {
         carrier: {
@@ -1084,29 +1338,50 @@ export const acceptCarrier = async (req: any, res: Response) => {
       },
     });
 
-    // Create notification for carrier
+    // Notify the accepted carrier
     await prisma.notification.create({
       data: {
         type: 'REQUEST_ACCEPTED',
         title: 'Candidature acceptée',
         message: `Votre candidature pour l'expédition ${shipment.refNumber} a été acceptée`,
-        carrierId: shipment.requestedCarrierId,
+        carrierId: application.carrierId,
         shipmentId: shipment.id,
         data: {
           shipmentRefNumber: shipment.refNumber,
           senderId: req.user.id,
+          acceptedPrice: application.proposedPrice,
         },
       },
     });
 
-    // Send push notification to carrier
-    const carrierForAccept = await prisma.carrier.findUnique({ where: { id: shipment.requestedCarrierId! }, select: { pushToken: true } });
+    const carrierForAccept = await prisma.carrier.findUnique({ where: { id: application.carrierId }, select: { pushToken: true } });
     await sendPushNotification(
       [carrierForAccept?.pushToken],
       'Candidature acceptée',
       `Votre candidature pour l'expédition ${shipment.refNumber} a été acceptée`,
       { shipmentId: shipment.id }
     );
+
+    // Notify rejected carriers
+    for (const rejected of rejectedApplications) {
+      await prisma.notification.create({
+        data: {
+          type: 'REQUEST_REJECTED',
+          title: 'Candidature refusée',
+          message: `Votre candidature pour l'expédition ${shipment.refNumber} n'a pas été retenue`,
+          carrierId: rejected.carrierId,
+          shipmentId: shipment.id,
+          data: { shipmentRefNumber: shipment.refNumber },
+        },
+      });
+      const rejectedCarrier = await prisma.carrier.findUnique({ where: { id: rejected.carrierId }, select: { pushToken: true } });
+      await sendPushNotification(
+        [rejectedCarrier?.pushToken],
+        'Candidature refusée',
+        `Votre candidature pour l'expédition ${shipment.refNumber} n'a pas été retenue`,
+        { shipmentId: shipment.id }
+      );
+    }
 
     res.status(200).json({
       success: true,
@@ -1123,12 +1398,21 @@ export const acceptCarrier = async (req: any, res: Response) => {
 };
 
 /**
- * Reject carrier request (sender rejects a carrier's application)
+ * Reject a specific carrier application (sender rejects one applicant)
  * POST /api/shipments/:id/reject-carrier
+ * TC-106: applicationId in body identifies which carrier to reject
  */
 export const rejectCarrier = async (req: any, res: Response) => {
   try {
     const { id } = req.params;
+    const { applicationId } = req.body;
+
+    if (!applicationId) {
+      return res.status(400).json({
+        success: false,
+        error: 'L\'ID de la candidature est obligatoire',
+      });
+    }
 
     // Find shipment
     const shipment = await prisma.shipment.findUnique({
@@ -1150,21 +1434,38 @@ export const rejectCarrier = async (req: any, res: Response) => {
       });
     }
 
-    // Check if shipment is in REQUESTED status
-    if (shipment.status !== ShipmentStatus.REQUESTED) {
-      return res.status(400).json({
+    // Find the specific application
+    const application = await prisma.shipmentApplication.findUnique({
+      where: { id: applicationId },
+    });
+
+    if (!application || application.shipmentId !== id) {
+      return res.status(404).json({
         success: false,
-        error: 'Aucune demande de transporteur pour cette expédition',
+        error: 'Candidature introuvable',
       });
     }
 
-    // Create notification for carrier before resetting
+    if (application.status !== 'PENDING') {
+      return res.status(400).json({
+        success: false,
+        error: 'Cette candidature n\'est plus en attente',
+      });
+    }
+
+    // Mark application as REJECTED
+    await prisma.shipmentApplication.update({
+      where: { id: applicationId },
+      data: { status: 'REJECTED' },
+    });
+
+    // Notify the rejected carrier
     await prisma.notification.create({
       data: {
         type: 'REQUEST_REJECTED',
         title: 'Candidature refusée',
         message: `Votre candidature pour l'expédition ${shipment.refNumber} a été refusée`,
-        carrierId: shipment.requestedCarrierId!,
+        carrierId: application.carrierId,
         shipmentId: id,
         data: {
           shipmentRefNumber: shipment.refNumber,
@@ -1173,8 +1474,7 @@ export const rejectCarrier = async (req: any, res: Response) => {
       },
     });
 
-    // Send push notification to carrier
-    const carrierForReject = await prisma.carrier.findUnique({ where: { id: shipment.requestedCarrierId! }, select: { pushToken: true } });
+    const carrierForReject = await prisma.carrier.findUnique({ where: { id: application.carrierId }, select: { pushToken: true } });
     await sendPushNotification(
       [carrierForReject?.pushToken],
       'Candidature refusée',
@@ -1182,20 +1482,29 @@ export const rejectCarrier = async (req: any, res: Response) => {
       { shipmentId: id }
     );
 
-    // Reset shipment back to PENDING so a new carrier can apply
-    const resetShipment = await prisma.shipment.update({
-      where: { id },
-      data: {
-        status: ShipmentStatus.PENDING,
-        requestedCarrierId: null,
-        carrierId: null,
-      },
+    // Check if any PENDING applications remain
+    const remainingPending = await prisma.shipmentApplication.count({
+      where: { shipmentId: id, status: 'PENDING' },
     });
+
+    // If no more pending applications, reset shipment to PENDING
+    let updatedShipment = shipment;
+    if (remainingPending === 0) {
+      updatedShipment = await prisma.shipment.update({
+        where: { id },
+        data: {
+          status: ShipmentStatus.PENDING,
+          requestedCarrierId: null,
+        },
+      });
+    }
 
     res.status(200).json({
       success: true,
-      message: 'Transporteur refusé. L\'expédition est à nouveau disponible.',
-      data: resetShipment,
+      message: remainingPending > 0
+        ? 'Candidature refusée. D\'autres candidatures sont en attente.'
+        : 'Candidature refusée. L\'expédition est à nouveau disponible.',
+      data: updatedShipment,
     });
   } catch (error) {
     console.error('Reject carrier error:', error);
