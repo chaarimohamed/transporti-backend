@@ -7,6 +7,8 @@
     "dev": "ts-node-dev --respawn --transpile-only src/server.ts",
     "build": "tsc",
     "start": "node dist/server.js",
+    "test:handover-flow": "bash ./scripts/test-handover-flow.sh",
+    "test:matching-invitation": "bash ./scripts/test-matching-invitation-flow.sh",
     "prisma:generate": "prisma generate",
     "prisma:migrate": "prisma migrate dev",
     "prisma:studio": "prisma studio"
