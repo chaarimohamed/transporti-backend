@@ -3,6 +3,17 @@ import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
 import crypto from 'crypto';
 import prisma from '../config/database';
+import { sendOtpSms } from '../utils/sms';
+import { sendOtpEmail, sendPasswordResetEmail } from '../utils/email';
+
+// --- OTP helpers ---
+
+/** Generate a cryptographically random 6-digit OTP string */
+const generateOtp = (): string =>
+  String(Math.floor(100000 + (parseInt(crypto.randomBytes(3).toString('hex'), 16) % 900000))).padStart(6, '0');
+
+/** OTP validity window */
+const OTP_TTL_MINUTES = 10;
 
 // Register new user
 export const register = async (req: Request, res: Response) => {
@@ -75,38 +86,28 @@ export const register = async (req: Request, res: Response) => {
     // Hash password
     const hashedPassword = await bcrypt.hash(password, 10);
 
-    let user;
-    let token;
+    // Generate OTP for phone verification
+    const otp = generateOtp();
+    const hashedOtp = await bcrypt.hash(otp, 10);
+    const otpExpiry = new Date(Date.now() + OTP_TTL_MINUTES * 60 * 1000);
+
+    let createdUser: any;
 
     if (userRole === 'sender') {
-      // Create sender
-      user = await prisma.sender.create({
+      createdUser = await prisma.sender.create({
         data: {
           email: email.toLowerCase(),
           password: hashedPassword,
           firstName,
           lastName,
           phone,
-        },
-        select: {
-          id: true,
-          email: true,
-          firstName: true,
-          lastName: true,
-          phone: true,
-          createdAt: true,
+          phoneVerified: false,
+          otpCode: hashedOtp,
+          otpExpiry,
         },
       });
-
-      // Generate JWT token
-      token = jwt.sign(
-        { id: user.id, email: user.email, role: 'sender' },
-        process.env.JWT_SECRET!,
-        { expiresIn: (process.env.JWT_EXPIRES_IN || '7d') as any }
-      );
     } else {
-      // Create carrier
-      user = await prisma.carrier.create({
+      createdUser = await prisma.carrier.create({
         data: {
           email: email.toLowerCase(),
           password: hashedPassword,
@@ -118,37 +119,25 @@ export const register = async (req: Request, res: Response) => {
           matricule,
           vehicleType,
           dateOfBirth,
-        },
-        select: {
-          id: true,
-          email: true,
-          firstName: true,
-          lastName: true,
-          phone: true,
-          gouvernerat: true,
-          license: true,
-          matricule: true,
-          vehicleType: true,
-          vehicleSize: true,
-          dateOfBirth: true,
-          verified: true,
-          createdAt: true,
+          phoneVerified: false,
+          otpCode: hashedOtp,
+          otpExpiry,
         },
       });
-
-      // Generate JWT token
-      token = jwt.sign(
-        { id: user.id, email: user.email, role: 'carrier' },
-        process.env.JWT_SECRET!,
-        { expiresIn: (process.env.JWT_EXPIRES_IN || '7d') as any }
-      );
     }
 
+    // Send OTP via SMS
+    await sendOtpSms(phone, otp);
+
+    // Return userId + role so the client can navigate to the OTP screen
+    // No JWT token yet — only issued after phone verification
     res.status(201).json({
       success: true,
       data: {
-        user: { ...user, role: userRole },
-        token,
+        userId: createdUser.id,
+        phone: createdUser.phone,
+        role: userRole,
+        requiresVerification: true,
       },
     });
   } catch (error) {
@@ -260,6 +249,10 @@ export const getMe = async (req: any, res: Response) => {
           vehicleType: true,
           vehicleSize: true,
           verified: true,
+          phoneVerified: true,
+          emailVerified: true,
+          cinDoc: true,
+          permisDoc: true,
           createdAt: true,
         },
       });
@@ -272,9 +265,19 @@ export const getMe = async (req: any, res: Response) => {
       });
     }
 
+    // Build verification status for carriers
+    const verificationStatus = userRole === 'carrier' ? {
+      phoneVerified: (user as any).phoneVerified ?? false,
+      emailVerified: (user as any).emailVerified ?? false,
+      docsUploaded: !!((user as any).cinDoc && (user as any).permisDoc),
+    } : undefined;
+
+    // Remove sensitive doc fields from response
+    const { cinDoc, permisDoc, ...safeUser } = user as any;
+
     res.status(200).json({
       success: true,
-      data: { ...user, role: userRole },
+      data: { ...safeUser, role: userRole, verificationStatus },
     });
   } catch (error) {
     console.error('GetMe error:', error);
@@ -339,10 +342,9 @@ export const forgotPassword = async (req: Request, res: Response) => {
       });
     }
 
-    // TODO: Send email with reset token
-    // For now, log it to console (in production, use a proper email service)
+    // Send password reset email
+    await sendPasswordResetEmail(user.email, resetToken);
     console.log(`Password reset token for ${email}: ${resetToken}`);
-    console.log(`Token expires at: ${resetTokenExpiry}`);
 
     res.status(200).json({
       success: true,
@@ -513,5 +515,227 @@ export const resetPassword = async (req: Request, res: Response) => {
       success: false,
       error: 'Erreur lors de la réinitialisation du mot de passe',
     });
+  }
+};
+
+// Verify phone OTP
+export const verifyPhone = async (req: Request, res: Response) => {
+  try {
+    const { userId, role, otp } = req.body;
+
+    if (!userId || !role || !otp) {
+      return res.status(400).json({ success: false, error: 'userId, role et otp requis' });
+    }
+
+    const userRole = role.toLowerCase();
+    const table = userRole === 'sender' ? prisma.sender : prisma.carrier;
+
+    const user = await (table as any).findUnique({
+      where: { id: userId },
+      select: { id: true, email: true, otpCode: true, otpExpiry: true, phoneVerified: true },
+    });
+
+    if (!user) {
+      return res.status(404).json({ success: false, error: 'Utilisateur introuvable' });
+    }
+
+    if (user.phoneVerified) {
+      return res.status(400).json({ success: false, error: 'Numéro déjà vérifié' });
+    }
+
+    if (!user.otpCode || !user.otpExpiry) {
+      return res.status(400).json({ success: false, error: 'Aucun code en attente — demandez un nouveau code' });
+    }
+
+    if (new Date() > new Date(user.otpExpiry)) {
+      return res.status(400).json({ success: false, error: 'Code expiré — demandez un nouveau code' });
+    }
+
+    const isValid = await bcrypt.compare(String(otp), user.otpCode);
+    if (!isValid) {
+      return res.status(400).json({ success: false, error: 'Code incorrect' });
+    }
+
+    // Mark as verified and clear OTP
+    const updatedUser = await (table as any).update({
+      where: { id: userId },
+      data: { phoneVerified: true, otpCode: null, otpExpiry: null },
+    });
+
+    // Generate JWT now that phone is verified
+    const token = jwt.sign(
+      { id: updatedUser.id, email: updatedUser.email, role: userRole },
+      process.env.JWT_SECRET!,
+      { expiresIn: (process.env.JWT_EXPIRES_IN || '7d') as any }
+    );
+
+    const { password: _, otpCode: __, otpExpiry: ___, ...userWithoutSecrets } = updatedUser;
+
+    res.status(200).json({
+      success: true,
+      data: {
+        user: { ...userWithoutSecrets, role: userRole },
+        token,
+      },
+    });
+  } catch (error) {
+    console.error('Verify phone error:', error);
+    res.status(500).json({ success: false, error: 'Erreur lors de la vérification' });
+  }
+};
+
+// Resend OTP
+export const resendOtp = async (req: Request, res: Response) => {
+  try {
+    const { userId, role } = req.body;
+
+    if (!userId || !role) {
+      return res.status(400).json({ success: false, error: 'userId et role requis' });
+    }
+
+    const userRole = role.toLowerCase();
+    const table = userRole === 'sender' ? prisma.sender : prisma.carrier;
+
+    const user = await (table as any).findUnique({
+      where: { id: userId },
+      select: { id: true, phone: true, phoneVerified: true, otpExpiry: true },
+    });
+
+    if (!user) {
+      return res.status(404).json({ success: false, error: 'Utilisateur introuvable' });
+    }
+
+    if (user.phoneVerified) {
+      return res.status(400).json({ success: false, error: 'Numéro déjà vérifié' });
+    }
+
+    // Rate-limit: don't resend if a valid OTP was issued less than 60 seconds ago
+    if (user.otpExpiry) {
+      const secondsRemaining = (new Date(user.otpExpiry).getTime() - Date.now()) / 1000;
+      const cooldownSeconds = OTP_TTL_MINUTES * 60 - 60;
+      if (secondsRemaining > cooldownSeconds) {
+        return res.status(429).json({
+          success: false,
+          error: 'Veuillez attendre avant de demander un nouveau code',
+        });
+      }
+    }
+
+    const otp = generateOtp();
+    const hashedOtp = await bcrypt.hash(otp, 10);
+    const otpExpiry = new Date(Date.now() + OTP_TTL_MINUTES * 60 * 1000);
+
+    await (table as any).update({
+      where: { id: userId },
+      data: { otpCode: hashedOtp, otpExpiry },
+    });
+
+    await sendOtpSms(user.phone, otp);
+
+    res.status(200).json({ success: true, message: 'Nouveau code envoyé' });
+  } catch (error) {
+    console.error('Resend OTP error:', error);
+    res.status(500).json({ success: false, error: 'Erreur lors de l\'envoi du code' });
+  }
+};
+
+// Send email OTP
+export const sendEmailOtp = async (req: any, res: Response) => {
+  try {
+    const userId = req.user.id;
+    const userRole = req.user.role;
+    const table = userRole === 'sender' ? prisma.sender : prisma.carrier;
+
+    const user = await (table as any).findUnique({
+      where: { id: userId },
+      select: { id: true, email: true, emailVerified: true, otpExpiry: true },
+    });
+
+    if (!user) {
+      return res.status(404).json({ success: false, error: 'Utilisateur introuvable' });
+    }
+
+    if (user.emailVerified) {
+      return res.status(400).json({ success: false, error: 'Email déjà vérifié' });
+    }
+
+    // Rate-limit: 60s cooldown
+    if (user.otpExpiry) {
+      const secondsRemaining = (new Date(user.otpExpiry).getTime() - Date.now()) / 1000;
+      const cooldownSeconds = OTP_TTL_MINUTES * 60 - 60;
+      if (secondsRemaining > cooldownSeconds) {
+        return res.status(429).json({
+          success: false,
+          error: 'Veuillez attendre avant de demander un nouveau code',
+        });
+      }
+    }
+
+    const otp = generateOtp();
+    const hashedOtp = await bcrypt.hash(otp, 10);
+    const otpExpiry = new Date(Date.now() + OTP_TTL_MINUTES * 60 * 1000);
+
+    await (table as any).update({
+      where: { id: userId },
+      data: { otpCode: hashedOtp, otpExpiry },
+    });
+
+    await sendOtpEmail(user.email, otp);
+
+    res.status(200).json({ success: true, message: 'Code envoyé par email' });
+  } catch (error) {
+    console.error('Send email OTP error:', error);
+    res.status(500).json({ success: false, error: 'Erreur lors de l\'envoi du code' });
+  }
+};
+
+// Verify email OTP
+export const verifyEmail = async (req: any, res: Response) => {
+  try {
+    const userId = req.user.id;
+    const userRole = req.user.role;
+    const { otp } = req.body;
+
+    if (!otp) {
+      return res.status(400).json({ success: false, error: 'Code requis' });
+    }
+
+    const table = userRole === 'sender' ? prisma.sender : prisma.carrier;
+
+    const user = await (table as any).findUnique({
+      where: { id: userId },
+      select: { id: true, otpCode: true, otpExpiry: true, emailVerified: true },
+    });
+
+    if (!user) {
+      return res.status(404).json({ success: false, error: 'Utilisateur introuvable' });
+    }
+
+    if (user.emailVerified) {
+      return res.status(400).json({ success: false, error: 'Email déjà vérifié' });
+    }
+
+    if (!user.otpCode || !user.otpExpiry) {
+      return res.status(400).json({ success: false, error: 'Aucun code en attente — demandez un nouveau code' });
+    }
+
+    if (new Date() > new Date(user.otpExpiry)) {
+      return res.status(400).json({ success: false, error: 'Code expiré — demandez un nouveau code' });
+    }
+
+    const isValid = await bcrypt.compare(String(otp), user.otpCode);
+    if (!isValid) {
+      return res.status(400).json({ success: false, error: 'Code incorrect' });
+    }
+
+    await (table as any).update({
+      where: { id: userId },
+      data: { emailVerified: true, otpCode: null, otpExpiry: null },
+    });
+
+    res.status(200).json({ success: true, message: 'Email vérifié avec succès' });
+  } catch (error) {
+    console.error('Verify email error:', error);
+    res.status(500).json({ success: false, error: 'Erreur lors de la vérification' });
   }
 };

@@ -1,10 +1,10 @@
 -- Add sender rating aggregates
 ALTER TABLE "senders"
-ADD COLUMN "averageRating" DOUBLE PRECISION DEFAULT 0,
-ADD COLUMN "totalReviews" INTEGER NOT NULL DEFAULT 0;
+ADD COLUMN IF NOT EXISTS "averageRating" DOUBLE PRECISION DEFAULT 0,
+ADD COLUMN IF NOT EXISTS "totalReviews" INTEGER NOT NULL DEFAULT 0;
 
 -- Create per-shipment feedback table
-CREATE TABLE "shipment_feedback" (
+CREATE TABLE IF NOT EXISTS "shipment_feedback" (
     "id" TEXT NOT NULL,
     "shipmentId" TEXT NOT NULL,
     "senderId" TEXT NOT NULL,
@@ -21,9 +21,9 @@ CREATE TABLE "shipment_feedback" (
     CONSTRAINT "shipment_feedback_pkey" PRIMARY KEY ("id")
 );
 
-CREATE UNIQUE INDEX "shipment_feedback_shipmentId_key" ON "shipment_feedback"("shipmentId");
-CREATE INDEX "shipment_feedback_senderId_idx" ON "shipment_feedback"("senderId");
-CREATE INDEX "shipment_feedback_carrierId_idx" ON "shipment_feedback"("carrierId");
+CREATE UNIQUE INDEX IF NOT EXISTS "shipment_feedback_shipmentId_key" ON "shipment_feedback"("shipmentId");
+CREATE INDEX IF NOT EXISTS "shipment_feedback_senderId_idx" ON "shipment_feedback"("senderId");
+CREATE INDEX IF NOT EXISTS "shipment_feedback_carrierId_idx" ON "shipment_feedback"("carrierId");
 
 ALTER TABLE "shipment_feedback" ADD CONSTRAINT "shipment_feedback_shipmentId_fkey"
 FOREIGN KEY ("shipmentId") REFERENCES "shipments"("id") ON DELETE CASCADE ON UPDATE CASCADE;
@@ -34,7 +34,7 @@ FOREIGN KEY ("senderId") REFERENCES "senders"("id") ON DELETE CASCADE ON UPDATE 
 ALTER TABLE "shipment_feedback" ADD CONSTRAINT "shipment_feedback_carrierId_fkey"
 FOREIGN KEY ("carrierId") REFERENCES "carriers"("id") ON DELETE CASCADE ON UPDATE CASCADE;
 
--- Preserve existing sender -> carrier reviews
+-- Preserve existing sender -> carrier reviews (skip if already migrated)
 INSERT INTO "shipment_feedback" (
     "id",
     "shipmentId",
@@ -56,7 +56,10 @@ SELECT
     "createdAt",
     "createdAt",
     "updatedAt"
-FROM "reviews";
+FROM "reviews"
+WHERE NOT EXISTS (
+    SELECT 1 FROM "shipment_feedback" sf WHERE sf."id" = "reviews"."id"
+);
 
 -- Refresh cached carrier rating fields from migrated feedback
 UPDATE "carriers" AS c

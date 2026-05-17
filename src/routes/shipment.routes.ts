@@ -18,8 +18,11 @@ import {
   getAvailableCarriers,
   getInvitedCarriers,
   confirmHandover,
+  resendDeliveryCode,
   submitShipmentFeedback,
   uploadShipmentPhotos,
+  counterOffer,
+  respondToCounter,
 } from '../controllers/shipment.controller';
 import { auth } from '../middleware/auth';
 
@@ -43,7 +46,10 @@ router.post('/:id/invite-carrier', inviteCarrier); // Sender invites carrier
 router.post('/:id/accept-invitation', acceptInvitation); // Carrier accepts invitation with proposed price
 router.post('/:id/accept-carrier', acceptCarrier); // Sender accepts a specific carrier application
 router.post('/:id/reject-carrier', rejectCarrier); // Sender rejects a specific carrier application
+router.post('/:id/counter-offer', counterOffer); // Sender sends counter-offer on application
+router.post('/:id/respond-counter', respondToCounter); // Carrier responds to sender's counter-offer
 router.post('/:id/confirm-handover', confirmHandover); // Sender confirms handover to carrier
+router.post('/:id/resend-delivery-code', resendDeliveryCode); // Carrier requests delivery code resend
 router.post('/:id/feedback', submitShipmentFeedback); // Sender/carrier submit delivery feedback
 router.post('/:id/photos', uploadShipmentPhotos);       // Sender uploads package photos
 router.put('/:id/status', updateShipmentStatus); // Carrier updates status

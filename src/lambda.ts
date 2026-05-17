@@ -39,6 +39,11 @@ async function resolveSecrets() {
     const secrets = JSON.parse(SecretString!);
     if (secrets.JWT_SECRET) process.env.JWT_SECRET = secrets.JWT_SECRET;
     if (secrets.DOCUMENTS_ENCRYPTION_KEY) process.env.DOCUMENTS_ENCRYPTION_KEY = secrets.DOCUMENTS_ENCRYPTION_KEY;
+    if (secrets.SMTP_HOST) process.env.SMTP_HOST = secrets.SMTP_HOST;
+    if (secrets.SMTP_PORT) process.env.SMTP_PORT = secrets.SMTP_PORT;
+    if (secrets.SMTP_USER) process.env.SMTP_USER = secrets.SMTP_USER;
+    if (secrets.SMTP_PASS) process.env.SMTP_PASS = secrets.SMTP_PASS;
+    if (secrets.EASYSENDSMS_API_KEY) process.env.EASYSENDSMS_API_KEY = secrets.EASYSENDSMS_API_KEY;
   }
 }
 

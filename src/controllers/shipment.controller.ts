@@ -1,7 +1,9 @@
 import { Request, Response } from 'express';
+import crypto from 'crypto';
 import prisma from '../config/database';
 import { ShipmentStatus } from '@prisma/client';
 import { sendPushNotification } from '../utils/pushNotification';
+import { sendOtpSms, sendDeliveryCodeSms } from '../utils/sms';
 
 // Generate reference number for shipments
 const generateRefNumber = () => {
@@ -85,6 +87,7 @@ export const createShipment = async (req: any, res: Response) => {
       itemName,
       cargo,
       price,
+      budget,
       description,
       pickupDate,
       weight,
@@ -134,6 +137,8 @@ export const createShipment = async (req: any, res: Response) => {
         ...(deliveryCity && { deliveryCity }),
         cargo: cargo || '',
         // Price is now set when a carrier application is accepted (TC-106)
+        // Budget is optional — set by sender at creation time
+        ...(budget !== undefined && budget !== null && { budget: parseFloat(budget) }),
         description: description || '',
         senderId: req.user.id,
         status: ShipmentStatus.PENDING,
@@ -227,6 +232,7 @@ export const getMyShipments = async (req: any, res: Response) => {
         deliveryCity: true,
         cargo: true,
         price: true,
+        budget: true,
         status: true,
         description: true,
         senderId: true,
@@ -349,6 +355,7 @@ export const getAvailableShipments = async (req: any, res: Response) => {
         deliveryCity: true,
         cargo: true,
         price: true,
+        budget: true,
         status: true,
         description: true,
         senderId: true,
@@ -426,6 +433,7 @@ export const getShipmentById = async (req: any, res: Response) => {
         deliveryCity: true,
         cargo: true,
         price: true,
+        budget: true,
         status: true,
         description: true,
         senderId: true,
@@ -552,6 +560,7 @@ export const getShipmentById = async (req: any, res: Response) => {
           select: {
             id: true,
             proposedPrice: true,
+            counterPrice: true,
             status: true,
             carrierId: true,
             shipmentId: true,
@@ -1096,82 +1105,59 @@ export const acceptInvitation = async (req: any, res: Response) => {
       });
     }
 
-    const pendingApplications = await prisma.shipmentApplication.findMany({
-      where: {
+    // Check if this carrier already has an application
+    const existingApplication = await prisma.shipmentApplication.findUnique({
+      where: { shipmentId_carrierId: { shipmentId: id, carrierId: req.user.id } },
+    });
+    if (existingApplication) {
+      return res.status(400).json({
+        success: false,
+        error: 'Vous avez déjà postulé pour cette expédition',
+      });
+    }
+
+    // Create an application (same as normal carrier flow) so sender can negotiate
+    const application = await prisma.shipmentApplication.create({
+      data: {
         shipmentId: id,
+        carrierId: req.user.id,
+        proposedPrice: price,
         status: 'PENDING',
       },
-      select: {
-        id: true,
-        carrierId: true,
-      },
     });
 
-    const invitedCarrierApplication = pendingApplications.find(
-      (application) => application.carrierId === req.user.id
-    );
-    const rejectedApplications = pendingApplications.filter(
-      (application) => application.carrierId !== req.user.id
-    );
-
-    if (invitedCarrierApplication) {
-      await prisma.shipmentApplication.update({
-        where: { id: invitedCarrierApplication.id },
+    // Transition shipment to REQUESTED if still PENDING
+    if (shipment.status === ShipmentStatus.PENDING) {
+      await prisma.shipment.update({
+        where: { id },
         data: {
-          status: 'ACCEPTED',
-          proposedPrice: price,
+          status: ShipmentStatus.REQUESTED,
+          requestedCarrierId: req.user.id,
         },
       });
     }
 
-    if (rejectedApplications.length > 0) {
-      await prisma.shipmentApplication.updateMany({
-        where: {
-          id: { in: rejectedApplications.map((application) => application.id) },
-        },
-        data: { status: 'REJECTED' },
-      });
-    }
-
-    // Directly confirm the shipment with the proposed price (sender invited this carrier)
-    const updatedShipment = await prisma.shipment.update({
-      where: { id },
-      data: {
-        status: ShipmentStatus.CONFIRMED,
+    // Delete the invitation notification (carrier has responded)
+    await prisma.notification.deleteMany({
+      where: {
+        shipmentId: id,
         carrierId: req.user.id,
-        requestedCarrierId: null,
-        price: price,
-      },
-      include: {
-        sender: {
-          select: {
-            id: true,
-            firstName: true,
-            lastName: true,
-            email: true,
-          },
-        },
-        carrier: {
-          select: {
-            id: true,
-            firstName: true,
-            lastName: true,
-          },
-        },
+        type: 'SHIPMENT_INVITATION',
       },
     });
 
-    // Create notification for sender
+    // Notify sender that the invited carrier responded with a price
     await prisma.notification.create({
       data: {
-        type: 'REQUEST_ACCEPTED',
+        type: 'CARRIER_REQUEST',
         title: 'Invitation acceptée',
-        message: `Le transporteur a accepté votre invitation pour l'expédition ${shipment.refNumber}`,
+        message: `Le transporteur invité a proposé ${price} DT pour l'expédition ${shipment.refNumber}`,
         senderId: shipment.senderId,
         shipmentId: shipment.id,
         data: {
           shipmentRefNumber: shipment.refNumber,
           carrierId: req.user.id,
+          proposedPrice: price,
         },
       },
     });
@@ -1181,48 +1167,16 @@ export const acceptInvitation = async (req: any, res: Response) => {
     await sendPushNotification(
       [senderForInvite?.pushToken],
       'Invitation acceptée',
-      `Le transporteur a accepté votre invitation pour l'expédition ${shipment.refNumber}`,
+      `Le transporteur invité a proposé ${price} DT pour l'expédition ${shipment.refNumber}`,
       { shipmentId: shipment.id }
     );
 
-    for (const rejectedApplication of rejectedApplications) {
-      await prisma.notification.create({
-        data: {
-          type: 'REQUEST_REJECTED',
-          title: 'Candidature refusée',
-          message: `Votre candidature pour l'expédition ${shipment.refNumber} n'a pas été retenue`,
-          carrierId: rejectedApplication.carrierId,
-          shipmentId: shipment.id,
-          data: { shipmentRefNumber: shipment.refNumber },
-        },
-      });
-
-      const rejectedCarrier = await prisma.carrier.findUnique({
-        where: { id: rejectedApplication.carrierId },
-        select: { pushToken: true },
-      });
-      await sendPushNotification(
-        [rejectedCarrier?.pushToken],
-        'Candidature refusée',
-        `Votre candidature pour l'expédition ${shipment.refNumber} n'a pas été retenue`,
-        { shipmentId: shipment.id }
-      );
-    }
-
-    // Delete all invitation notifications for this shipment to avoid stale invites
-    await prisma.notification.deleteMany({
-      where: {
-        shipmentId: id,
-        type: 'SHIPMENT_INVITATION',
-      },
-    });
-
-    console.log(`✅ Carrier ${req.user.id} accepted invitation for shipment ${shipment.refNumber} - Status set to CONFIRMED`);
+    console.log(`✅ Carrier ${req.user.id} accepted invitation for shipment ${shipment.refNumber} - Application created, awaiting sender approval`);
 
     res.status(200).json({
       success: true,
-      message: 'Invitation acceptée avec succès',
-      data: updatedShipment,
+      message: 'Invitation acceptée — votre proposition a été envoyée à l\'expéditeur',
+      data: application,
     });
   } catch (error) {
     console.error('Accept invitation error:', error);
@@ -1522,7 +1476,6 @@ export const rejectCarrier = async (req: any, res: Response) => {
 export const updateShipment = async (req: any, res: Response) => {
   try {
     const { id } = req.params;
-    const { from, to, cargo, price, description, status } = req.body;
 
     // Find shipment
     const shipment = await prisma.shipment.findUnique({
@@ -1544,17 +1497,57 @@ export const updateShipment = async (req: any, res: Response) => {
       });
     }
 
+    // Only editable before carrier is assigned
+    const editableStatuses: string[] = ['PENDING', 'REQUESTED'];
+    if (!editableStatuses.includes(shipment.status)) {
+      return res.status(400).json({
+        success: false,
+        error: 'Impossible de modifier : un transporteur a déjà été confirmé.',
+      });
+    }
+
+    const {
+      from, to, cargo, price, description,
+      itemName, pickupDate, packageFormat, budget,
+      senderName, senderPhone, recipientName, recipientPhone,
+      pickupInstructions, deliveryInstructions,
+      helperCount, deliveryHelperCount,
+      pickupMeetingPoint, deliveryMeetingPoint,
+      pickupCity, deliveryCity, distance, duration,
+      packagePhotos,
+    } = req.body;
+
+    // Build update data
+    const data: any = {};
+    if (from !== undefined) data.from = from;
+    if (to !== undefined) data.to = to;
+    if (cargo !== undefined) data.cargo = cargo;
+    if (price !== undefined) data.price = price !== null ? parseFloat(price) : null;
+    if (budget !== undefined) data.budget = budget !== null ? parseFloat(budget) : null;
+    if (description !== undefined) data.description = description;
+    if (itemName !== undefined) data.itemName = itemName;
+    if (pickupDate !== undefined) data.pickupDate = pickupDate ? new Date(pickupDate) : null;
+    if (packageFormat !== undefined) data.packageFormat = packageFormat;
+    if (senderName !== undefined) data.senderName = senderName;
+    if (senderPhone !== undefined) data.senderPhone = senderPhone;
+    if (recipientName !== undefined) data.recipientName = recipientName;
+    if (recipientPhone !== undefined) data.recipientPhone = recipientPhone;
+    if (pickupInstructions !== undefined) data.pickupInstructions = pickupInstructions;
+    if (deliveryInstructions !== undefined) data.deliveryInstructions = deliveryInstructions;
+    if (helperCount !== undefined) data.helperCount = parseInt(helperCount) || 0;
+    if (deliveryHelperCount !== undefined) data.deliveryHelperCount = parseInt(deliveryHelperCount) || 0;
+    if (pickupMeetingPoint !== undefined) data.pickupMeetingPoint = pickupMeetingPoint;
+    if (deliveryMeetingPoint !== undefined) data.deliveryMeetingPoint = deliveryMeetingPoint;
+    if (pickupCity !== undefined) data.pickupCity = pickupCity;
+    if (deliveryCity !== undefined) data.deliveryCity = deliveryCity;
+    if (distance !== undefined) data.distance = distance;
+    if (duration !== undefined) data.duration = duration;
+    if (packagePhotos !== undefined) data.packagePhotos = packagePhotos;
+
     // Update shipment
     const updated = await prisma.shipment.update({
       where: { id },
-      data: {
-        ...(from && { from }),
-        ...(to && { to }),
-        ...(cargo && { cargo }),
-        ...(price && { price: parseFloat(price) }),
-        ...(description && { description }),
-        ...(status && { status: status.toUpperCase() as ShipmentStatus }),
-      },
+      data,
       include: {
         sender: {
           select: {
@@ -1563,14 +1556,6 @@ export const updateShipment = async (req: any, res: Response) => {
             lastName: true,
             phone: true,
             email: true,
-          },
-        },
-        carrier: {
-          select: {
-            id: true,
-            firstName: true,
-            lastName: true,
-            phone: true,
           },
         },
       },
@@ -2023,8 +2008,8 @@ export const confirmHandover = async (req: any, res: Response) => {
       });
     }
 
-    // Generate a one-time delivery confirmation code
-    const deliveryCode = Math.floor(100000 + Math.random() * 900000).toString();
+    // Generate a cryptographically secure 6-digit delivery confirmation code
+    const deliveryCode = crypto.randomInt(100000, 999999).toString();
 
     const updatedShipment = await prisma.shipment.update({
       where: { id },
@@ -2073,7 +2058,7 @@ export const confirmHandover = async (req: any, res: Response) => {
     });
 
     // Send push notification to sender
-    const senderForTransit = await prisma.sender.findUnique({ where: { id: shipment.senderId }, select: { pushToken: true } });
+    const senderForTransit = await prisma.sender.findUnique({ where: { id: shipment.senderId }, select: { pushToken: true, phone: true } });
     await sendPushNotification(
       [senderForTransit?.pushToken],
       '🚚 En route — Code de livraison',
@@ -2081,11 +2066,75 @@ export const confirmHandover = async (req: any, res: Response) => {
       { shipmentId: shipment.id, deliveryCode }
     );
 
+    // Send delivery code via SMS to the recipient
+    // If recipientPhone is specified, send to recipient; otherwise the recipient is the sender
+    const recipientPhone = shipment.recipientPhone || senderForTransit?.phone || shipment.senderPhone;
+    if (recipientPhone) {
+      await sendDeliveryCodeSms(recipientPhone, deliveryCode, shipment.refNumber);
+      console.log(`📱 Delivery code SMS sent to ${recipientPhone} for shipment ${shipment.refNumber}`);
+    } else {
+      console.warn(`⚠️ No recipient phone found for shipment ${shipment.refNumber} — delivery code SMS not sent`);
+    }
+
     console.log(`✅ Handover confirmed — shipment ${shipment.refNumber} is now IN_TRANSIT, code: ${deliveryCode}`);
     res.status(200).json({ success: true, data: updatedShipment });
   } catch (error) {
     console.error('Confirm handover error:', error);
     res.status(500).json({ success: false, error: 'Erreur lors de la confirmation de la remise' });
+  }
+};
+
+/**
+ * POST /shipments/:id/resend-delivery-code
+ * Regenerate delivery code and resend via SMS to the recipient (or sender).
+ * Only the carrier assigned to this shipment can request a resend.
+ */
+export const resendDeliveryCode = async (req: any, res: Response) => {
+  try {
+    const { id } = req.params;
+    const carrierId = req.user.id;
+
+    const shipment = await prisma.shipment.findUnique({
+      where: { id },
+      include: {
+        sender: { select: { phone: true } },
+      },
+    });
+
+    if (!shipment) {
+      return res.status(404).json({ success: false, error: 'Expédition introuvable' });
+    }
+
+    if (shipment.carrierId !== carrierId) {
+      return res.status(403).json({ success: false, error: 'Accès non autorisé' });
+    }
+
+    if (shipment.status !== 'IN_TRANSIT') {
+      return res.status(400).json({
+        success: false,
+        error: 'Le renvoi du code n\'est possible que pour les expéditions en transit',
+      });
+    }
+
+    // Generate a new delivery code
+    const deliveryCode = crypto.randomInt(100000, 999999).toString();
+
+    await prisma.shipment.update({
+      where: { id },
+      data: { deliveryCode },
+    });
+
+    // Send SMS to recipient (or sender if no recipient specified)
+    const recipientPhone = shipment.recipientPhone || shipment.sender?.phone || shipment.senderPhone;
+    if (recipientPhone) {
+      await sendDeliveryCodeSms(recipientPhone, deliveryCode, shipment.refNumber);
+      console.log(`📱 Delivery code resent to ${recipientPhone} for shipment ${shipment.refNumber}`);
+    }
+
+    res.status(200).json({ success: true, message: 'Code de livraison renvoyé par SMS' });
+  } catch (error) {
+    console.error('Resend delivery code error:', error);
+    res.status(500).json({ success: false, error: 'Erreur lors du renvoi du code' });
   }
 };
 
@@ -2120,5 +2169,230 @@ export const uploadShipmentPhotos = async (req: any, res: Response) => {
   } catch (error) {
     console.error('Upload shipment photos error:', error);
     res.status(500).json({ success: false, error: 'Erreur lors du téléchargement des photos' });
+  }
+};
+
+/**
+ * Sender sends a counter-offer on a carrier's application
+ * POST /api/shipments/:id/counter-offer
+ */
+export const counterOffer = async (req: any, res: Response) => {
+  try {
+    const { id } = req.params;
+    const { applicationId, counterPrice } = req.body;
+
+    if (!applicationId || counterPrice == null) {
+      return res.status(400).json({
+        success: false,
+        error: 'applicationId et counterPrice sont obligatoires',
+      });
+    }
+
+    const price = parseFloat(counterPrice);
+    if (isNaN(price) || price <= 0) {
+      return res.status(400).json({
+        success: false,
+        error: 'Un prix valide est obligatoire',
+      });
+    }
+
+    const shipment = await prisma.shipment.findUnique({
+      where: { id },
+      include: { sender: { select: { id: true, firstName: true, lastName: true } } },
+    });
+
+    if (!shipment) {
+      return res.status(404).json({ success: false, error: 'Expédition introuvable' });
+    }
+
+    if (shipment.senderId !== req.user.id) {
+      return res.status(403).json({ success: false, error: 'Seul l\'expéditeur peut faire une contre-offre' });
+    }
+
+    const application = await prisma.shipmentApplication.findUnique({
+      where: { id: applicationId },
+    });
+
+    if (!application || application.shipmentId !== id) {
+      return res.status(404).json({ success: false, error: 'Candidature introuvable' });
+    }
+
+    if (application.status !== 'PENDING') {
+      return res.status(400).json({ success: false, error: 'Cette candidature n\'est plus en attente' });
+    }
+
+    const updatedApplication = await prisma.shipmentApplication.update({
+      where: { id: applicationId },
+      data: {
+        counterPrice: price,
+        status: 'COUNTER_OFFERED',
+      },
+      include: {
+        carrier: {
+          select: { id: true, firstName: true, lastName: true, pushToken: true },
+        },
+      },
+    });
+
+    // Notify carrier
+    await prisma.notification.create({
+      data: {
+        type: 'COUNTER_OFFER',
+        title: 'Contre-offre reçue',
+        message: `L'expéditeur propose ${price} DT pour l'expédition ${shipment.refNumber} (votre prix : ${application.proposedPrice} DT)`,
+        carrierId: application.carrierId,
+        shipmentId: id,
+        data: {
+          shipmentRefNumber: shipment.refNumber,
+          counterPrice: price,
+          originalPrice: application.proposedPrice,
+        },
+      },
+    });
+
+    await sendPushNotification(
+      [updatedApplication.carrier?.pushToken],
+      'Contre-offre reçue',
+      `L'expéditeur propose ${price} DT (votre prix : ${application.proposedPrice} DT)`,
+      { shipmentId: id }
+    );
+
+    res.status(200).json({
+      success: true,
+      message: 'Contre-offre envoyée au transporteur',
+      data: updatedApplication,
+    });
+  } catch (error) {
+    console.error('Counter offer error:', error);
+    res.status(500).json({ success: false, error: 'Erreur lors de l\'envoi de la contre-offre' });
+  }
+};
+
+/**
+ * Carrier responds to a sender's counter-offer
+ * POST /api/shipments/:id/respond-counter
+ * Body: { action: 'accept' | 'counter', newPrice?: number }
+ */
+export const respondToCounter = async (req: any, res: Response) => {
+  try {
+    const { id } = req.params;
+    const { action, newPrice } = req.body;
+
+    if (action !== 'accept') {
+      return res.status(400).json({
+        success: false,
+        error: 'Action invalide. Seule l\'action "accept" est autorisée.',
+      });
+    }
+
+    if (req.user.role?.toUpperCase() !== 'CARRIER') {
+      return res.status(403).json({
+        success: false,
+        error: 'Seuls les transporteurs peuvent répondre à une contre-offre',
+      });
+    }
+
+    const shipment = await prisma.shipment.findUnique({
+      where: { id },
+      include: { sender: { select: { id: true, pushToken: true } } },
+    });
+
+    if (!shipment) {
+      return res.status(404).json({ success: false, error: 'Expédition introuvable' });
+    }
+
+    const application = await prisma.shipmentApplication.findUnique({
+      where: { shipmentId_carrierId: { shipmentId: id, carrierId: req.user.id } },
+    });
+
+    if (!application) {
+      return res.status(404).json({ success: false, error: 'Candidature introuvable' });
+    }
+
+    if (application.status !== 'COUNTER_OFFERED') {
+      return res.status(400).json({ success: false, error: 'Aucune contre-offre en attente' });
+    }
+
+    if (action === 'accept') {
+      // Carrier accepts sender's counter-price → auto-assign carrier to shipment
+      const agreedPrice = application.counterPrice!;
+
+      // Mark this application as ACCEPTED
+      const updatedApp = await prisma.shipmentApplication.update({
+        where: { id: application.id },
+        data: {
+          proposedPrice: agreedPrice,
+          status: 'ACCEPTED',
+        },
+      });
+
+      // Reject all other PENDING applications for this shipment
+      const rejectedApplications = await prisma.shipmentApplication.findMany({
+        where: { shipmentId: id, status: 'PENDING', id: { not: application.id } },
+        select: { id: true, carrierId: true },
+      });
+      if (rejectedApplications.length > 0) {
+        await prisma.shipmentApplication.updateMany({
+          where: { shipmentId: id, status: 'PENDING', id: { not: application.id } },
+          data: { status: 'REJECTED' },
+        });
+      }
+
+      // Assign carrier to shipment with agreed price
+      await prisma.shipment.update({
+        where: { id },
+        data: {
+          carrierId: req.user.id,
+          price: agreedPrice,
+          status: ShipmentStatus.CONFIRMED,
+          requestedCarrierId: null,
+        },
+      });
+
+      // Notify sender that negotiation is complete and carrier is assigned
+      await prisma.notification.create({
+        data: {
+          type: 'COUNTER_ACCEPTED',
+          title: 'Négociation terminée',
+          message: `Le transporteur a accepté ${agreedPrice} DT pour ${shipment.refNumber}. Mission confirmée !`,
+          senderId: shipment.senderId,
+          shipmentId: id,
+          data: {
+            shipmentRefNumber: shipment.refNumber,
+            acceptedPrice: agreedPrice,
+          },
+        },
+      });
+
+      await sendPushNotification(
+        [shipment.sender?.pushToken],
+        'Négociation terminée',
+        `Le transporteur a accepté ${agreedPrice} DT. Mission confirmée !`,
+        { shipmentId: id }
+      );
+
+      // Notify rejected carriers
+      for (const rejected of rejectedApplications) {
+        await prisma.notification.create({
+          data: {
+            type: 'REQUEST_REJECTED',
+            title: 'Candidature refusée',
+            message: `Votre candidature pour l'expédition ${shipment.refNumber} n'a pas été retenue`,
+            carrierId: rejected.carrierId,
+            shipmentId: id,
+            data: { shipmentRefNumber: shipment.refNumber },
+          },
+        });
+      }
+
+      res.status(200).json({
+        success: true,
+        message: 'Vous avez accepté la contre-offre du client',
+        data: updatedApp,
+      });
+    }
+  } catch (error) {
+    console.error('Respond to counter error:', error);
+    res.status(500).json({ success: false, error: 'Erreur lors de la réponse à la contre-offre' });
   }
 };

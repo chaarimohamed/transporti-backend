@@ -67,6 +67,15 @@ export async function handler(event: { RequestType: string; PhysicalResourceId?:
   try {
     await ensureMigrationsTable(client);
 
+    // Clean up stale migration records (started but never finished due to a
+    // previous failed deploy).  This lets the handler safely re-attempt them.
+    const { rowCount: staleCleaned } = await client.query(
+      `DELETE FROM "${MIGRATIONS_TABLE}" WHERE finished_at IS NULL`,
+    );
+    if (staleCleaned && staleCleaned > 0) {
+      console.log(`[migrate] cleaned ${staleCleaned} stale migration record(s)`);
+    }
+
     // Migrations are copied into /var/task/migrations/ by the afterBundling hook.
     const migrationsDir = path.join('/var/task', 'migrations');
     const folders = fs.readdirSync(migrationsDir)
@@ -98,7 +107,61 @@ export async function handler(event: { RequestType: string; PhysicalResourceId?:
         [id, checksum, folder],
       );
 
-      await client.query(sql);
+      // PostgreSQL "already exists", "does not exist", and "unique violation"
+      // errors are treated as warnings so that migrations remain safe to re-run
+      // against a DB that was previously set up via `prisma db push` or a direct
+      // schema migration, or after a partial migration that was cleaned up.
+      const IDEMPOTENT_CODES = new Set([
+        '42701',  // duplicate_column
+        '42P07',  // duplicate_table
+        '42710',  // duplicate_object
+        '42704',  // undefined_object
+        '42703',  // undefined_column
+        '42P01',  // undefined_table
+        '23505',  // unique_violation (INSERT re-run on already-migrated data)
+      ]);
+
+      // Smart splitter that doesn't break inside $$ ... $$ blocks
+      const splitStatements = (raw: string): string[] => {
+        const stmts: string[] = [];
+        let current = '';
+        let inDollarQuote = false;
+        const lines = raw.split('\n');
+        for (const line of lines) {
+          if (line.includes('$$')) {
+            inDollarQuote = !inDollarQuote;
+            // Handle $$ open and close on same line
+            const count = (line.match(/\$\$/g) || []).length;
+            if (count % 2 === 0) inDollarQuote = !inDollarQuote; // even count = still same state
+          }
+          current += line + '\n';
+          if (!inDollarQuote && line.trimEnd().endsWith(';')) {
+            const trimmed = current.trim();
+            if (trimmed.replace(/--[^\n]*/g, '').trim().length > 0) {
+              stmts.push(trimmed);
+            }
+            current = '';
+          }
+        }
+        if (current.trim().replace(/--[^\n]*/g, '').trim().length > 0) {
+          stmts.push(current.trim());
+        }
+        return stmts;
+      };
+
+      const statements = splitStatements(sql);
+
+      for (const stmt of statements) {
+        try {
+          await client.query(stmt);
+        } catch (err: any) {
+          if (IDEMPOTENT_CODES.has(err.code)) {
+            console.warn(`[migrate] warn  ${folder}: skipping idempotent error — ${err.message}`);
+          } else {
+            throw err;
+          }
+        }
+      }
 
       await client.query(
         `UPDATE "${MIGRATIONS_TABLE}" SET finished_at = now(), applied_steps_count = 1 WHERE id = $1`,

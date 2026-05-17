@@ -1,0 +1,3 @@
+ALTER TABLE "shipments" DROP COLUMN IF EXISTS "budgetMin";
+ALTER TABLE "shipments" DROP COLUMN IF EXISTS "budgetMax";
+ALTER TABLE "shipments" ADD COLUMN "budget" DOUBLE PRECISION;

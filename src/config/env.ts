@@ -51,4 +51,5 @@ export const env = {
   jwtExpiresIn: parseJwtExpiresIn(),
   allowedOrigins: parseAllowedOrigins(),
   documentsEncryptionKey: process.env.DOCUMENTS_ENCRYPTION_KEY?.trim(),
+  easySendSmsApiKey: process.env.EASYSENDSMS_API_KEY?.trim(),
 };

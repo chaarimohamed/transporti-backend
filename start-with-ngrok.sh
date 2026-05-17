@@ -4,8 +4,8 @@
 set -e
 
 ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
-BACKEND_DIR="$ROOT_DIR/transporti-backend"
-MOBILE_ENV="$ROOT_DIR/transporti-mobile/.env"
+BACKEND_DIR="$(cd "$(dirname "$0")" && pwd)"
+MOBILE_ENV="$ROOT_DIR/mobile-app/.env"
 NGROK_API_HOST="localhost"
 NGROK_API_PORT="4041"
 NGROK_BASE_CONFIG="${XDG_CONFIG_HOME:-$HOME/.config}/ngrok/ngrok.yml"
@@ -95,7 +95,7 @@ echo "✅ Backend public URL: $NGROK_URL"
 echo "✅ Mobile API URL set to: $PUBLIC_API_URL"
 echo ""
 echo "Now run in another terminal:"
-echo "  npm run start:mobile:tunnel"
+echo "  cd ../mobile-app && npm run start:tunnel"
 echo ""
 
 if [ -n "$BACKEND_PID" ]; then

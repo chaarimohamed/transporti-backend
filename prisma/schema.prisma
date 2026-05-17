@@ -27,6 +27,8 @@ enum NotificationType {
   SHIPMENT_INVITATION   // Sender invited carrier
   REQUEST_ACCEPTED      // Sender accepted carrier
   REQUEST_REJECTED      // Sender rejected carrier
+  COUNTER_OFFER         // Sender sent counter-offer
+  COUNTER_ACCEPTED      // Carrier accepted counter-offer
   HANDOVER_REQUESTED    // Carrier arrived, asking sender to confirm handover
   HANDOVER_CONFIRMED    // Sender confirmed handover to carrier
   SHIPMENT_IN_TRANSIT   // Shipment started delivery
@@ -56,6 +58,14 @@ model Sender {
 
   // Push notification token (Expo push token)
   pushToken String?
+
+  // Phone OTP verification
+  phoneVerified    Boolean   @default(false)
+  otpCode          String?   // bcrypt-hashed 6-digit code
+  otpExpiry        DateTime?
+
+  // Email verification
+  emailVerified    Boolean   @default(false)
 
   // Timestamps
   createdAt DateTime @default(now())
@@ -106,6 +116,14 @@ model Carrier {
   // Push notification token (Expo push token)
   pushToken String?
 
+  // Phone OTP verification
+  phoneVerified    Boolean   @default(false)
+  otpCode          String?   // bcrypt-hashed 6-digit code
+  otpExpiry        DateTime?
+
+  // Email verification
+  emailVerified    Boolean   @default(false)
+
   // Timestamps
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -133,6 +151,7 @@ model Shipment {
   deliveryCity String?
   cargo       String?
   price       Float?
+  budget      Float?
   status      ShipmentStatus @default(PENDING)
   description String?
   
@@ -248,6 +267,7 @@ model ShipmentFeedback {
 // Enum for carrier application status (TC-106)
 enum ApplicationStatus {
   PENDING
+  COUNTER_OFFERED
   ACCEPTED
   REJECTED
 }
@@ -260,6 +280,7 @@ model ShipmentApplication {
   carrierId     String
   carrier       Carrier           @relation(fields: [carrierId], references: [id], onDelete: Cascade)
   proposedPrice Float
+  counterPrice  Float?
   status        ApplicationStatus @default(PENDING)
   createdAt     DateTime          @default(now())
   updatedAt     DateTime          @updatedAt
